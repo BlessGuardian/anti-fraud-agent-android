@@ -1,3 +1,14 @@
 <resources>
     <string name="app_name">AntiFraudAgent</string>
+
+    <!--
+        Texto exibido pelo Android na tela de Acessibilidade > AntiFraudAgent.
+        Deve explicar claramente o que o serviço faz — o Android exige isso.
+    -->
+    <string name="accessibility_service_description">
+        O AntiFraud Agent monitora o conteúdo de mensagens em apps de comunicação
+        (WhatsApp, Telegram e Instagram) para detectar golpes e fraudes em tempo real.
+        O serviço é restrito exclusivamente a esses aplicativos e nenhum dado é
+        compartilhado sem sua autorização.
+    </string>
 </resources>

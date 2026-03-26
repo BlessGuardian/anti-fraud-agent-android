@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--Configuração do FraudAccessibilityService.
+
+    Pontos importantes:
+    - packageNames: restringe o serviço APENAS aos apps monitorados.
+      Isso é crucial para performance e privacidade — o serviço NÃO é
+      ativado para nenhum outro app no dispositivo.
+    - canRetrieveWindowContent: permite ler o conteúdo da tela (obrigatório).
+    - accessibilityEventTypes: escutamos apenas mudanças de conteúdo de janela
+      e mudanças de texto — filtramos na camada de código também.
+    - notificationTimeout: intervalo mínimo entre eventos entregues ao serviço (ms). -->
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeViewTextChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:packageNames="com.whatsapp,org.telegram.messenger,com.instagram.android,com.google.android.apps.messaging,com.samsung.android.messaging" />
