@@ -75,13 +75,14 @@ enum class MessageSource {
 
     companion object {
         /** Converte o packageName do app para o enum correspondente. */
-        fun fromPackage(packageName: String): MessageSource = when (packageName) {
+        fun fromPackage(packageName: String): MessageSource = when (packageName.lowercase()) {
             "com.whatsapp"                       -> WHATSAPP
             "org.telegram.messenger"             -> TELEGRAM
             "com.instagram.android"              -> INSTAGRAM
             "com.google.android.apps.messaging",
             "com.android.mms",
-            "com.samsung.android.messaging"      -> SMS
+            "com.samsung.android.messaging",
+            "sms"                                -> SMS
             else                                 -> UNKNOWN
         }
     }
