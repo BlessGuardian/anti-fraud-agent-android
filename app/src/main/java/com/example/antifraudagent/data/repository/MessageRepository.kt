@@ -1,134 +1,196 @@
 package com.example.antifraudagent.data.repository
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
+import com.example.antifraudagent.data.device.DeviceIdentityProvider
 import com.example.antifraudagent.data.local.database.AppDatabase
 import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
+import com.example.antifraudagent.data.remote.FraudAnalysisResult
+import com.example.antifraudagent.data.remote.FraudApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/**
- * Camada de repositório — ponto único de acesso ao banco local para todo o app.
- *
- * Encapsula o DAO e aplica as regras de negócio decididas no Chat 3:
- *  - Só salva mensagens com layer1Score ≥ 0.4.
- *  - A fila de PENDING tem limite máximo de [MAX_PENDING_MESSAGES].
- *  - Quando o limite é atingido, o registro PENDING com menor score é descartado
- *    para dar lugar ao novo (prioriza as suspeitas mais graves).
- */
 class MessageRepository(context: Context) {
 
-    private val dao = AppDatabase.getInstance(context).analyzedMessageDao()
+    private val appContext = context.applicationContext
+    private val dao = AppDatabase.getInstance(appContext).analyzedMessageDao()
+    private val apiClient = FraudApiClient()
+    private val userId = DeviceIdentityProvider.getUserId(appContext)
 
     companion object {
         private const val TAG = "MessageRepository"
-
-        /** Limite máximo de mensagens aguardando análise remota. ~50KB no SQLite. */
         private const val MAX_PENDING_MESSAGES = 100
+        private const val MIN_MESSAGE_LENGTH = 4
 
-        /** Score mínimo da Camada 1 para que uma mensagem seja salva. */
         const val MIN_SCORE_TO_SAVE = 0.4f
     }
 
-    // -------------------------------------------------------------------------
-    // Salvar mensagem capturada (chamado pelos serviços de captura)
-    // -------------------------------------------------------------------------
-
     /**
-     * Avalia se a mensagem deve ser salva e, em caso positivo, persiste no banco.
+     * Ponto de entrada dos servicos de captura.
      *
-     * @param sender     Remetente da mensagem.
-     * @param content    Conteúdo da mensagem.
-     * @param packageName Package do app de origem (convertido para [MessageSource]).
-     * @param layer1Score Score calculado pela heurística local (Camada 1).
-     *
-     * Fluxo:
-     *  1. Se layer1Score < 0.4 → descarta em memória, não salva nada.
-     *  2. Se a fila de PENDING já tem 100 itens → descarta o de menor score.
-     *  3. Salva a nova mensagem com status PENDING.
+     * Com internet, envia direto ao servidor e salva localmente apenas fraudes confirmadas.
+     * Sem internet, salva como PENDING para reprocessar quando uma nova captura ocorrer online.
      */
     suspend fun saveIfSuspicious(
-        sender      : String,
-        content     : String,
-        packageName : String,
-        layer1Score : Float
+        sender: String,
+        content: String,
+        packageName: String,
+        layer1Score: Float
     ) = withContext(Dispatchers.IO) {
+        val trimmedContent = content.trim()
+        if (!passesMinimumQuality(trimmedContent, layer1Score)) return@withContext
 
-        // Regra 1: score abaixo do limiar → descarta em memória
-        if (layer1Score < MIN_SCORE_TO_SAVE) {
-            Log.d(TAG, "Score $layer1Score < $MIN_SCORE_TO_SAVE — descartado em memória")
+        val source = MessageSource.fromPackage(packageName)
+        val message = AnalyzedMessage(
+            sender = sender.ifBlank { source.name },
+            content = trimmedContent,
+            source = source,
+            layer1Score = layer1Score,
+            status = MessageStatus.PENDING
+        )
+
+        if (!isOnline()) {
+            enqueuePending(message)
             return@withContext
         }
 
-        // Regra 2: fila cheia → descarta o menos suspeito para abrir espaço
+        processPendingMessagesInternal()
+
+        try {
+            analyzeAndPersist(message)
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao enviar mensagem atual; salvando como PENDING", e)
+            enqueuePending(message)
+        }
+    }
+
+    suspend fun getConfirmedFrauds(): List<AnalyzedMessage> =
+        withContext(Dispatchers.IO) { dao.getAllConfirmedFrauds() }
+
+    suspend fun getPendingMessages(): List<AnalyzedMessage> =
+        withContext(Dispatchers.IO) { dao.getAllPending() }
+
+    suspend fun processPendingMessages() = withContext(Dispatchers.IO) {
+        if (!isOnline()) return@withContext
+        processPendingMessagesInternal()
+    }
+
+    suspend fun updateWithServerResult(
+        id: Long,
+        layer2Score: Float,
+        riskScore: Float,
+        fraudType: String,
+        explanation: String,
+        isConfirmed: Boolean
+    ) = withContext(Dispatchers.IO) {
+        val newStatus = if (isConfirmed) MessageStatus.CONFIRMED_FRAUD else MessageStatus.DISMISSED
+        dao.updateWithServerResult(id, layer2Score, riskScore, fraudType, explanation, newStatus)
+        Log.d(TAG, "Registro id=$id atualizado -> status=$newStatus | riskScore=$riskScore")
+    }
+
+    suspend fun cleanupDismissed() = withContext(Dispatchers.IO) {
+        dao.deleteDismissed()
+        Log.d(TAG, "Registros DISMISSED removidos do banco")
+    }
+
+    private suspend fun processPendingMessagesInternal() {
+        val pendingMessages = dao.getAllPending()
+        if (pendingMessages.isEmpty()) return
+
+        for (pending in pendingMessages) {
+            try {
+                analyzeAndPersist(pending)
+            } catch (e: Exception) {
+                Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
+                break
+            }
+        }
+    }
+
+    private suspend fun analyzeAndPersist(message: AnalyzedMessage) {
+        val result = apiClient.detect(
+            userId = userId,
+            messageContent = message.content,
+            source = message.source
+        )
+
+        if (result.isFraud) {
+            persistConfirmedFraud(message, result)
+        } else if (message.id != 0L) {
+            dao.delete(message)
+            Log.d(TAG, "Servidor descartou id=${message.id}; registro removido")
+        } else {
+            Log.d(TAG, "Servidor descartou mensagem online; nada salvo localmente")
+        }
+    }
+
+    private suspend fun persistConfirmedFraud(
+        message: AnalyzedMessage,
+        result: FraudAnalysisResult
+    ) {
+        if (message.id == 0L) {
+            val confirmed = message.copy(
+                layer2Score = result.score,
+                riskScore = result.score,
+                fraudType = result.category,
+                explanation = result.explanation,
+                status = MessageStatus.CONFIRMED_FRAUD
+            )
+            val id = dao.insert(confirmed)
+            Log.d(TAG, "Fraude confirmada salva com id=$id | score=${result.score} | dbSynced=${result.dbSynced}")
+        } else {
+            updateWithServerResult(
+                id = message.id,
+                layer2Score = result.score,
+                riskScore = result.score,
+                fraudType = result.category,
+                explanation = result.explanation,
+                isConfirmed = true
+            )
+        }
+    }
+
+    private suspend fun enqueuePending(message: AnalyzedMessage) {
         val pendingCount = dao.countPending()
         if (pendingCount >= MAX_PENDING_MESSAGES) {
             val lowestScore = dao.getPendingWithLowestScore()
             if (lowestScore != null) {
-                // Só descarta o existente se o novo for mais suspeito
-                if (layer1Score > (lowestScore.layer1Score)) {
+                if (message.layer1Score > lowestScore.layer1Score) {
                     dao.delete(lowestScore)
-                    Log.d(TAG, "Fila cheia: descartado registro id=${lowestScore.id} " +
-                               "(score=${lowestScore.layer1Score}) para salvar novo (score=$layer1Score)")
+                    Log.d(TAG, "Fila cheia: removido id=${lowestScore.id} para salvar nova mensagem")
                 } else {
-                    Log.d(TAG, "Fila cheia e novo score ($layer1Score) não supera o menor " +
-                               "existente (${lowestScore.layer1Score}) — descartado")
-                    return@withContext
+                    Log.d(TAG, "Fila cheia: nova mensagem descartada por menor prioridade")
+                    return
                 }
             }
         }
 
-        // Regra 3: salva com status PENDING
-        val message = AnalyzedMessage(
-            sender      = sender,
-            content     = content,
-            source      = MessageSource.fromPackage(packageName),
-            layer1Score = layer1Score,
-            status      = MessageStatus.PENDING
-        )
-        val id = dao.insert(message)
-        Log.d(TAG, "Mensagem salva com id=$id | source=${message.source} | score=$layer1Score")
+        val id = dao.insert(message.copy(status = MessageStatus.PENDING))
+        Log.d(TAG, "Mensagem salva como PENDING id=$id | source=${message.source}")
     }
 
-    // -------------------------------------------------------------------------
-    // Consultas (usadas pela UI e pelo Chat 6)
-    // -------------------------------------------------------------------------
+    private fun passesMinimumQuality(content: String, layer1Score: Float): Boolean {
+        if (content.length < MIN_MESSAGE_LENGTH) {
+            Log.d(TAG, "Mensagem curta demais; descartada")
+            return false
+        }
 
-    /** Retorna o histórico de golpes confirmados (para exibir ao usuário). */
-    suspend fun getConfirmedFrauds(): List<AnalyzedMessage> =
-        withContext(Dispatchers.IO) { dao.getAllConfirmedFrauds() }
+        if (layer1Score < MIN_SCORE_TO_SAVE) {
+            Log.d(TAG, "Score $layer1Score < $MIN_SCORE_TO_SAVE; descartado em memoria")
+            return false
+        }
 
-    /** Retorna a fila de pendentes (para o Chat 6 enviar ao servidor quando houver internet). */
-    suspend fun getPendingMessages(): List<AnalyzedMessage> =
-        withContext(Dispatchers.IO) { dao.getAllPending() }
-
-    // -------------------------------------------------------------------------
-    // Atualização com resultado do servidor (chamado no Chat 6)
-    // -------------------------------------------------------------------------
-
-    /**
-     * Atualiza um registro PENDING com o resultado retornado pela FastAPI.
-     * Se confirmado como golpe → status CONFIRMED_FRAUD (fica no histórico).
-     * Se descartado → status DISMISSED, depois limpa com [cleanupDismissed].
-     */
-    suspend fun updateWithServerResult(
-        id          : Long,
-        layer2Score : Float,
-        riskScore   : Float,
-        fraudType   : String,
-        explanation : String,
-        isConfirmed : Boolean
-    ) = withContext(Dispatchers.IO) {
-        val newStatus = if (isConfirmed) MessageStatus.CONFIRMED_FRAUD else MessageStatus.DISMISSED
-        dao.updateWithServerResult(id, layer2Score, riskScore, fraudType, explanation, newStatus)
-        Log.d(TAG, "Registro id=$id atualizado → status=$newStatus | riskScore=$riskScore")
+        return true
     }
 
-    /** Remove registros descartados pelo servidor para liberar espaço. */
-    suspend fun cleanupDismissed() = withContext(Dispatchers.IO) {
-        dao.deleteDismissed()
-        Log.d(TAG, "Registros DISMISSED removidos do banco")
+    private fun isOnline(): Boolean {
+        val connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 }
