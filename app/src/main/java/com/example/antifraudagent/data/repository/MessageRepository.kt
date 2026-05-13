@@ -10,6 +10,7 @@ import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
 import com.example.antifraudagent.data.remote.FraudApiClient
+import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -71,6 +72,26 @@ class MessageRepository(context: Context) {
 
     suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
         withContext(Dispatchers.IO) { apiClient.getLogs(deviceId = deviceId) }
+
+    suspend fun analyzeManualMessage(content: String): FraudAnalysisResult =
+        withContext(Dispatchers.IO) {
+            val trimmedContent = content.trim()
+            if (trimmedContent.length < MIN_MESSAGE_LENGTH) {
+                throw IllegalArgumentException("Digite uma mensagem com pelo menos $MIN_MESSAGE_LENGTH caracteres.")
+            }
+
+            val result = apiClient.detect(
+                deviceId = deviceId,
+                messageContent = trimmedContent,
+                source = MessageSource.MANUAL
+            )
+
+            if (!result.dbSynced) {
+                throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no Aiven")
+            }
+
+            result
+        }
 
     suspend fun getPendingMessages(): List<AnalyzedMessage> =
         withContext(Dispatchers.IO) { dao.getAllPending() }
