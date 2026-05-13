@@ -51,7 +51,7 @@ Regras:
 
 - Usar `device_id`, nunca `user_id`, no payload novo.
 - `device_id` vem de `DeviceIdentityProvider`.
-- `source` deve ser `SMS`, `WHATSAPP`, `TELEGRAM`, `INSTAGRAM` ou `UNKNOWN`.
+- `source` deve ser `SMS`, `WHATSAPP`, `TELEGRAM`, `INSTAGRAM`, `MANUAL` ou `UNKNOWN`.
 - `FraudApiClient.DEFAULT_BASE_URL` deve ser validado antes de testes, pois ngrok muda.
 
 ## Room / SQLite
@@ -79,6 +79,7 @@ A tela principal deve:
 - mostrar status das permissoes;
 - mostrar quantidade de pendencias offline;
 - ter secao `Alertas gravados`;
+- ter aba `Analisar` para envio manual de mensagens suspeitas com `source=MANUAL`;
 - consultar historico via `GET /logs?device_id=...`;
 - nao usar Room como fonte do historico.
 
