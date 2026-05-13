@@ -15,7 +15,7 @@ class FraudApiClient(
 ) {
 
     suspend fun detect(
-        userId: String,
+        deviceId: String,
         messageContent: String,
         source: MessageSource
     ): FraudAnalysisResult = withContext(Dispatchers.IO) {
@@ -30,7 +30,7 @@ class FraudApiClient(
         }
 
         val payload = JSONObject()
-            .put("user_id", userId)
+            .put("device_id", deviceId)
             .put("message_content", messageContent)
             .put("source", source.name)
             .toString()
@@ -51,6 +51,38 @@ class FraudApiClient(
             }
 
             parseResponse(responseBody)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    suspend fun getLogs(
+        deviceId: String,
+        limit: Int = 50,
+        offset: Int = 0
+    ): List<RemoteFraudLog> = withContext(Dispatchers.IO) {
+        val url = URL("$baseUrl/logs?device_id=$deviceId&limit=$limit&offset=$offset")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("ngrok-skip-browser-warning", "true")
+        }
+
+        try {
+            val responseCode = connection.responseCode
+            val responseBody = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            }
+
+            if (responseCode !in 200..299) {
+                throw IOException("FastAPI returned HTTP $responseCode: $responseBody")
+            }
+
+            parseLogs(responseBody)
         } finally {
             connection.disconnect()
         }
@@ -88,13 +120,32 @@ class FraudApiClient(
         )
     }
 
+    private fun parseLogs(responseBody: String): List<RemoteFraudLog> {
+        val root = JSONObject(responseBody)
+        val data = root.optJSONArray("data") ?: return emptyList()
+
+        return (0 until data.length()).mapNotNull { index ->
+            val item = data.optJSONObject(index) ?: return@mapNotNull null
+            RemoteFraudLog(
+                id = item.optString("id"),
+                userId = item.optString("user_id"),
+                content = item.optString("content"),
+                riskScore = normalizeScore(item.optDouble("risk_score", 0.0)).toFloat(),
+                isFraud = item.optBoolean("is_fraud", false),
+                explanation = item.optString("explanation"),
+                source = item.optString("source"),
+                detectedAt = item.optString("detected_at")
+            )
+        }
+    }
+
     private fun normalizeScore(score: Double): Double {
         val normalized = if (score > 1.0) score / 100.0 else score
         return min(1.0, max(0.0, normalized))
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://ef5e-2804-1b3-a903-bed3-2dfe-5064-9514-ca59.ngrok-free.app"
+        const val DEFAULT_BASE_URL = "https://bf1b-2804-1b3-a900-9b72-55fc-bdbd-b029-5675.ngrok-free.app"
     }
 }
 
@@ -104,4 +155,15 @@ data class FraudAnalysisResult(
     val category: String,
     val explanation: String,
     val dbSynced: Boolean
+)
+
+data class RemoteFraudLog(
+    val id: String,
+    val userId: String,
+    val content: String,
+    val riskScore: Float,
+    val isFraud: Boolean,
+    val explanation: String,
+    val source: String,
+    val detectedAt: String
 )

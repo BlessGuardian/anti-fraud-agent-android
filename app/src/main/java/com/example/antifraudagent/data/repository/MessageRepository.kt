@@ -9,17 +9,18 @@ import com.example.antifraudagent.data.local.database.AppDatabase
 import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
-import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.FraudApiClient
+import com.example.antifraudagent.data.remote.RemoteFraudLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 class MessageRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val dao = AppDatabase.getInstance(appContext).analyzedMessageDao()
     private val apiClient = FraudApiClient()
-    private val userId = DeviceIdentityProvider.getUserId(appContext)
+    private val deviceId = DeviceIdentityProvider.getDeviceId(appContext)
 
     companion object {
         private const val TAG = "MessageRepository"
@@ -32,8 +33,8 @@ class MessageRepository(context: Context) {
     /**
      * Ponto de entrada dos servicos de captura.
      *
-     * Com internet, envia direto ao servidor e salva localmente apenas fraudes confirmadas.
-     * Sem internet, salva como PENDING para reprocessar quando uma nova captura ocorrer online.
+     * Com internet, envia direto ao servidor, que grava no Aiven.
+     * Sem internet, salva no Room apenas como fila PENDING de envio.
      */
     suspend fun saveIfSuspicious(
         sender: String,
@@ -68,8 +69,8 @@ class MessageRepository(context: Context) {
         }
     }
 
-    suspend fun getConfirmedFrauds(): List<AnalyzedMessage> =
-        withContext(Dispatchers.IO) { dao.getAllConfirmedFrauds() }
+    suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
+        withContext(Dispatchers.IO) { apiClient.getLogs(deviceId = deviceId) }
 
     suspend fun getPendingMessages(): List<AnalyzedMessage> =
         withContext(Dispatchers.IO) { dao.getAllPending() }
@@ -79,31 +80,13 @@ class MessageRepository(context: Context) {
         processPendingMessagesInternal()
     }
 
-    suspend fun updateWithServerResult(
-        id: Long,
-        layer2Score: Float,
-        riskScore: Float,
-        fraudType: String,
-        explanation: String,
-        isConfirmed: Boolean
-    ) = withContext(Dispatchers.IO) {
-        val newStatus = if (isConfirmed) MessageStatus.CONFIRMED_FRAUD else MessageStatus.DISMISSED
-        dao.updateWithServerResult(id, layer2Score, riskScore, fraudType, explanation, newStatus)
-        Log.d(TAG, "Registro id=$id atualizado -> status=$newStatus | riskScore=$riskScore")
-    }
-
-    suspend fun cleanupDismissed() = withContext(Dispatchers.IO) {
-        dao.deleteDismissed()
-        Log.d(TAG, "Registros DISMISSED removidos do banco")
-    }
-
     private suspend fun processPendingMessagesInternal() {
         val pendingMessages = dao.getAllPending()
         if (pendingMessages.isEmpty()) return
 
         for (pending in pendingMessages) {
             try {
-                analyzeAndPersist(pending)
+                analyzeAndClearPending(pending)
             } catch (e: Exception) {
                 Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
                 break
@@ -113,45 +96,26 @@ class MessageRepository(context: Context) {
 
     private suspend fun analyzeAndPersist(message: AnalyzedMessage) {
         val result = apiClient.detect(
-            userId = userId,
+            deviceId = deviceId,
             messageContent = message.content,
             source = message.source
         )
 
+        if (!result.dbSynced) {
+            throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no Aiven")
+        }
+
         if (result.isFraud) {
-            persistConfirmedFraud(message, result)
-        } else if (message.id != 0L) {
-            dao.delete(message)
-            Log.d(TAG, "Servidor descartou id=${message.id}; registro removido")
+            Log.d(TAG, "Fraude detectada pelo servidor | score=${result.score} | dbSynced=${result.dbSynced}")
         } else {
-            Log.d(TAG, "Servidor descartou mensagem online; nada salvo localmente")
+            Log.d(TAG, "Servidor descartou mensagem online")
         }
     }
 
-    private suspend fun persistConfirmedFraud(
-        message: AnalyzedMessage,
-        result: FraudAnalysisResult
-    ) {
-        if (message.id == 0L) {
-            val confirmed = message.copy(
-                layer2Score = result.score,
-                riskScore = result.score,
-                fraudType = result.category,
-                explanation = result.explanation,
-                status = MessageStatus.CONFIRMED_FRAUD
-            )
-            val id = dao.insert(confirmed)
-            Log.d(TAG, "Fraude confirmada salva com id=$id | score=${result.score} | dbSynced=${result.dbSynced}")
-        } else {
-            updateWithServerResult(
-                id = message.id,
-                layer2Score = result.score,
-                riskScore = result.score,
-                fraudType = result.category,
-                explanation = result.explanation,
-                isConfirmed = true
-            )
-        }
+    private suspend fun analyzeAndClearPending(message: AnalyzedMessage) {
+        analyzeAndPersist(message)
+        dao.delete(message)
+        Log.d(TAG, "PENDING id=${message.id} enviado ao servidor e removido do Room")
     }
 
     private suspend fun enqueuePending(message: AnalyzedMessage) {
