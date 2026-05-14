@@ -36,6 +36,7 @@ enum class MessageSource {
     TELEGRAM,
     INSTAGRAM,
     SMS,
+    MANUAL,
     UNKNOWN;
 
     companion object {
