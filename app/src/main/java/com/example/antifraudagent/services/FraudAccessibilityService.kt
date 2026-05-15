@@ -10,6 +10,7 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.antifraudagent.BuildConfig
 import com.example.antifraudagent.data.repository.MessageRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,7 @@ class FraudAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
+        if (pkg == BuildConfig.APPLICATION_ID) return
         if (pkg !in targetApps) return
 
         if (pkg != currentPackage) {
@@ -100,6 +102,11 @@ class FraudAccessibilityService : AccessibilityService() {
 
     private fun processWindow(packageName: String) {
         val root = rootInActiveWindow ?: return
+        val activePkg = root.packageName?.toString()
+        if (activePkg != packageName) {
+            Log.d(TAG, "Janela ativa mudou ($packageName -> $activePkg); captura abortada")
+            return
+        }
         val messages = mutableListOf<String>()
         collectMessages(root, messages)
 
@@ -111,9 +118,10 @@ class FraudAccessibilityService : AccessibilityService() {
 
                 Log.d(TAG, "[$packageName] Nova mensagem capturada: \"$msg\"")
 
-                // Camada 1 será implementada no Chat 5.
-                // Score fixo de 0.5 para testar o fluxo de persistência.
-                val layer1Score = 0.5f // TODO (Chat 5): substituir por LocalHeuristicAnalyzer.analyze(msg)
+                // Higiene/normalizacao/dedup rodam dentro de MessageRepository.saveIfSuspicious()
+                // via LocalMessagePreprocessor. O layer1Score continua fixo apenas como valor
+                // tecnico para o Room; a pontuacao real de fraude vem do backend Python.
+                val layer1Score = 0.5f
 
                 serviceScope.launch {
                     repository.saveIfSuspicious(
@@ -145,7 +153,15 @@ class FraudAccessibilityService : AccessibilityService() {
             "Enviar", "Anexar", "Câmera", "Emoji", "Áudio", "Figurinha",
             "Pesquisar", "Voltar", "Arquivadas", "Mensagem",
             "✓", "✓✓", "Lida", "Entregue",
-            "Hoje", "Ontem", "..."
+            "Hoje", "Ontem", "...",
+            "Inicio", "Início", "Historico", "Histórico", "Perfil", "Analisar",
+            "Atualizar", "Atualizando", "risco atual", "medio risco", "alto risco", "baixo risco",
+            "msgs analisadas", "golpes bloqueados", "Alertas recentes",
+            "Procurando novas mensagens", "Mensagem inofensiva.", "Mensagem segura.",
+            "Historico atualizado pelo servidor", "INDICE DE VULNERABILIDADE",
+            "online", "offline", "protegido", "pausado", "sem envio",
+            "PRIVACIDADE", "Envio para o servidor",
+            "0.00", "0.10"
         )
         return text in knownLabels
     }

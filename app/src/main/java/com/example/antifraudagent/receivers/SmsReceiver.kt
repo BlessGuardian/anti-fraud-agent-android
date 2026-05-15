@@ -31,9 +31,10 @@ class SmsReceiver : BroadcastReceiver() {
 
             Log.d("SmsReceiver", "De: $sender | Msg: $message")
 
-            // Camada 1 será implementada no Chat 5.
-            // Score fixo de 0.5 para testar o fluxo de persistência.
-            val layer1Score = 0.5f // TODO (Chat 5): substituir por LocalHeuristicAnalyzer.analyze(message)
+            // Higiene/normalizacao/dedup rodam dentro de MessageRepository.saveIfSuspicious()
+            // via LocalMessagePreprocessor. O layer1Score continua fixo apenas como valor
+            // tecnico para o Room; a pontuacao real de fraude vem do backend Python.
+            val layer1Score = 0.5f
 
             receiverScope.launch {
                 repository.saveIfSuspicious(

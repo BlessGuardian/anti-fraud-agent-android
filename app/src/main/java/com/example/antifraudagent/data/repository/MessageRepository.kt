@@ -9,6 +9,7 @@ import com.example.antifraudagent.data.local.database.AppDatabase
 import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
+import com.example.antifraudagent.data.local.preprocessing.LocalMessagePreprocessor
 import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
@@ -50,13 +51,25 @@ class MessageRepository(context: Context) {
             return@withContext
         }
 
-        val trimmedContent = content.trim()
-        if (!passesMinimumQuality(trimmedContent, layer1Score)) return@withContext
+        val preprocessed = LocalMessagePreprocessor.process(
+            content = content,
+            sender = sender,
+            packageName = packageName
+        )
+        val normalizedContent = when (preprocessed) {
+            is LocalMessagePreprocessor.PreprocessResult.Rejected -> {
+                Log.d(TAG, "Captura descartada pelo preprocessor: ${preprocessed.reason}")
+                return@withContext
+            }
+            is LocalMessagePreprocessor.PreprocessResult.Accepted -> preprocessed.normalizedText
+        }
+
+        if (!passesMinimumQuality(normalizedContent, layer1Score)) return@withContext
 
         val source = MessageSource.fromPackage(packageName)
         val message = AnalyzedMessage(
             sender = sender.ifBlank { source.name },
-            content = trimmedContent,
+            content = normalizedContent,
             source = source,
             layer1Score = layer1Score,
             status = MessageStatus.PENDING
