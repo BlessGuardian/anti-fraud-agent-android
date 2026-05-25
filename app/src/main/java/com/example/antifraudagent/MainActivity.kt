@@ -61,6 +61,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +83,7 @@ import androidx.core.content.ContextCompat
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import com.example.antifraudagent.data.repository.MessageRepository
+import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.services.FraudAccessibilityService
 import com.example.antifraudagent.services.MessageListenerService
 import com.example.antifraudagent.ui.theme.AntiFraudAgentTheme
@@ -129,6 +131,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             AntiFraudAgentTheme {
                 val repository = remember { MessageRepository(applicationContext) }
+                val settings = remember { SettingsRepository.getInstance(applicationContext) }
+                val captureEnabled by settings.captureEnabled.collectAsState()
                 val scope = rememberCoroutineScope()
                 var selectedTab by remember { mutableStateOf(AppTab.Home) }
                 var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
@@ -193,6 +197,7 @@ class MainActivity : ComponentActivity() {
                     onTabSelected = { selectedTab = it },
                     notificationEnabled = isNotificationEnabled,
                     accessibilityEnabled = isAccessibilityEnabled,
+                    captureEnabled = captureEnabled,
                     pendingCount = pendingCount,
                     logs = fraudLogs,
                     isLoading = isLoading,
@@ -205,7 +210,8 @@ class MainActivity : ComponentActivity() {
                     onAnalyzeManual = { analyzeManualMessage() },
                     onRefresh = { refreshData() },
                     onRequestNotification = { openNotificationListenerSettings() },
-                    onRequestAccessibility = { openAccessibilitySettings() }
+                    onRequestAccessibility = { openAccessibilitySettings() },
+                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) }
                 )
             }
         }
@@ -279,6 +285,7 @@ fun BlessGuardianApp(
     onTabSelected: (AppTab) -> Unit,
     notificationEnabled: Boolean,
     accessibilityEnabled: Boolean,
+    captureEnabled: Boolean,
     pendingCount: Int,
     logs: List<RemoteFraudLog>,
     isLoading: Boolean,
@@ -291,7 +298,8 @@ fun BlessGuardianApp(
     onAnalyzeManual: () -> Unit,
     onRefresh: () -> Unit,
     onRequestNotification: () -> Unit,
-    onRequestAccessibility: () -> Unit
+    onRequestAccessibility: () -> Unit,
+    onCaptureEnabledChange: (Boolean) -> Unit
 ) {
     Scaffold(
         containerColor = BlessBackground,
@@ -307,6 +315,7 @@ fun BlessGuardianApp(
                 padding = padding,
                 logs = logs,
                 pendingCount = pendingCount,
+                captureEnabled = captureEnabled,
                 isLoading = isLoading,
                 feedback = feedback,
                 onRefresh = onRefresh
@@ -334,10 +343,12 @@ fun BlessGuardianApp(
                 padding = padding,
                 notificationEnabled = notificationEnabled,
                 accessibilityEnabled = accessibilityEnabled,
+                captureEnabled = captureEnabled,
                 pendingCount = pendingCount,
                 logs = logs,
                 onRequestNotification = onRequestNotification,
-                onRequestAccessibility = onRequestAccessibility
+                onRequestAccessibility = onRequestAccessibility,
+                onCaptureEnabledChange = onCaptureEnabledChange
             )
         }
     }
@@ -376,6 +387,7 @@ fun HomeScreen(
     padding: PaddingValues,
     logs: List<RemoteFraudLog>,
     pendingCount: Int,
+    captureEnabled: Boolean,
     isLoading: Boolean,
     feedback: String?,
     onRefresh: () -> Unit
@@ -394,7 +406,8 @@ fun HomeScreen(
             TopHandle()
             VulnerabilityCard(
                 score = vulnerability,
-                pendingCount = pendingCount
+                pendingCount = pendingCount,
+                captureEnabled = captureEnabled
             )
         }
 
@@ -621,10 +634,12 @@ fun ProfileScreen(
     padding: PaddingValues,
     notificationEnabled: Boolean,
     accessibilityEnabled: Boolean,
+    captureEnabled: Boolean,
     pendingCount: Int,
     logs: List<RemoteFraudLog>,
     onRequestNotification: () -> Unit,
-    onRequestAccessibility: () -> Unit
+    onRequestAccessibility: () -> Unit,
+    onCaptureEnabledChange: (Boolean) -> Unit
 ) {
     val analyzedCount = logs.size
     val blockedCount = logs.count { it.isFraud }
@@ -668,6 +683,31 @@ fun ProfileScreen(
                     enabled = false,
                     onClick = {}
                 )
+            }
+        }
+
+        item {
+            GlassPanel {
+                PanelLabel("PRIVACIDADE")
+                ProtectionToggleRow(
+                    title = "Envio para o servidor",
+                    subtitle = if (captureEnabled) {
+                        "Mensagens capturadas sao enviadas ao backend para analise."
+                    } else {
+                        "Pausado. Nada e enviado nem salvo na fila offline."
+                    },
+                    checked = captureEnabled,
+                    onClick = { onCaptureEnabledChange(!captureEnabled) }
+                )
+                if (!captureEnabled) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Use ao testar com dados sensiveis no celular pessoal. " +
+                            "Lembre de reativar antes de demonstrar o app.",
+                        color = BlessWarning,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
 
@@ -794,7 +834,7 @@ fun PageHeader(
 }
 
 @Composable
-fun VulnerabilityCard(score: Float, pendingCount: Int) {
+fun VulnerabilityCard(score: Float, pendingCount: Int, captureEnabled: Boolean) {
     GlassPanel {
         Text(
             text = "INDICE DE VULNERABILIDADE",
@@ -824,11 +864,26 @@ fun VulnerabilityCard(score: Float, pendingCount: Int) {
         }
         Spacer(modifier = Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val statusVisual = when {
+                !captureEnabled -> RiskVisual("Pausado", BlessWarning, BlessWarningSoft)
+                pendingCount == 0 -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
+                else -> RiskVisual("Pendente", BlessWarning, BlessWarningSoft)
+            }
+            val statusValue = when {
+                !captureEnabled -> "pausado"
+                pendingCount == 0 -> "online"
+                else -> "offline"
+            }
+            val statusLabel = when {
+                !captureEnabled -> "sem envio"
+                pendingCount == 0 -> "protegido"
+                else -> "$pendingCount pendencias"
+            }
             StatusPill(
                 modifier = Modifier.weight(1f),
-                label = if (pendingCount == 0) "protegido" else "$pendingCount pendencias",
-                value = if (pendingCount == 0) "online" else "offline",
-                visual = RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
+                label = statusLabel,
+                value = statusValue,
+                visual = statusVisual
             )
             StatusPill(
                 modifier = Modifier.weight(1f),

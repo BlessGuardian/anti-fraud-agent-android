@@ -12,6 +12,7 @@ import com.example.antifraudagent.data.local.entity.MessageStatus
 import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
+import com.example.antifraudagent.data.settings.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -22,6 +23,7 @@ class MessageRepository(context: Context) {
     private val dao = AppDatabase.getInstance(appContext).analyzedMessageDao()
     private val apiClient = FraudApiClient()
     private val deviceId = DeviceIdentityProvider.getDeviceId(appContext)
+    private val settings = SettingsRepository.getInstance(appContext)
 
     companion object {
         private const val TAG = "MessageRepository"
@@ -43,6 +45,11 @@ class MessageRepository(context: Context) {
         packageName: String,
         layer1Score: Float
     ) = withContext(Dispatchers.IO) {
+        if (!settings.isCaptureEnabled()) {
+            Log.d(TAG, "Envio pausado pelo usuario; mensagem descartada antes de Room/HTTP")
+            return@withContext
+        }
+
         val trimmedContent = content.trim()
         if (!passesMinimumQuality(trimmedContent, layer1Score)) return@withContext
 
@@ -75,6 +82,10 @@ class MessageRepository(context: Context) {
 
     suspend fun analyzeManualMessage(content: String): FraudAnalysisResult =
         withContext(Dispatchers.IO) {
+            if (!settings.isCaptureEnabled()) {
+                throw IllegalStateException("Envio pausado em Perfil. Reative para analisar mensagens.")
+            }
+
             val trimmedContent = content.trim()
             if (trimmedContent.length < MIN_MESSAGE_LENGTH) {
                 throw IllegalArgumentException("Digite uma mensagem com pelo menos $MIN_MESSAGE_LENGTH caracteres.")
@@ -97,6 +108,10 @@ class MessageRepository(context: Context) {
         withContext(Dispatchers.IO) { dao.getAllPending() }
 
     suspend fun processPendingMessages() = withContext(Dispatchers.IO) {
+        if (!settings.isCaptureEnabled()) {
+            Log.d(TAG, "Envio pausado pelo usuario; fila PENDING nao sera processada")
+            return@withContext
+        }
         if (!isOnline()) return@withContext
         processPendingMessagesInternal()
     }
