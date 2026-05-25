@@ -14,7 +14,7 @@ Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens s
 - Target SDK: API 36
 - Package: `com.example.antifraudagent`
 - Banco local: Room/SQLite apenas como fila offline
-- Branch de referencia atual: `refactor/aws-migration`
+- Branch de referencia atual: `main`
 
 ## Arquitetura atual
 
@@ -28,12 +28,15 @@ O fluxo correto e:
 
 ```text
 Mensagem capturada
+-> SettingsRepository.isCaptureEnabled() (kill switch da aba Perfil)
 -> filtro minimo local
 -> se online: POST /detect
 -> se offline: Room PENDING
 -> backend grava no DynamoDB
 -> historico vem de GET /logs?device_id=...
 ```
+
+`SettingsRepository` (em `data/settings/SettingsRepository.kt`) e um singleton com SharedPreferences que expoe a flag `capture_enabled` (default `true`) via `StateFlow`. Compose (aba Perfil) e `MessageRepository` observam a mesma instancia. Quando desligado, `saveIfSuspicious`, `analyzeManualMessage` e `processPendingMessages` retornam cedo sem tocar Room nem HTTP.
 
 ## Contrato com backend
 
@@ -93,6 +96,7 @@ A tela principal deve:
 - Nao prometer captura de audio de chamadas como implementada.
 - Preservar debounce/deduplicacao do `FraudAccessibilityService`.
 - Nao adicionar `<?xml version="1.0"?>` em `accessibility_service_config.xml`.
+- Captura passiva, analise manual e fila offline respeitam `SettingsRepository.isCaptureEnabled()`. Nao bypassar essa flag em novos pontos de envio.
 
 ## Checklist antes de entregar
 
@@ -105,6 +109,7 @@ A tela principal deve:
 - Pendencia so sai do Room com `status_db=true`.
 - `Atualizar` consulta `/logs?device_id=...`.
 - `Alertas gravados` mostra dados vindos do backend AWS (DynamoDB).
+- Kill switch da aba Perfil pausa envio e nao acumula em Room enquanto desligado.
 
 ## Formato esperado de resposta
 
