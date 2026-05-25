@@ -26,13 +26,12 @@ class FraudApiClient(
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("ngrok-skip-browser-warning", "true")
         }
 
         val payload = JSONObject()
             .put("device_id", deviceId)
             .put("message_content", messageContent)
-            .put("source", source.name)
+            .put("source", source.name.lowercase())
             .toString()
             .toByteArray(Charsets.UTF_8)
 
@@ -67,7 +66,6 @@ class FraudApiClient(
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("ngrok-skip-browser-warning", "true")
         }
 
         try {
@@ -145,7 +143,7 @@ class FraudApiClient(
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://bf1b-2804-1b3-a900-9b72-55fc-bdbd-b029-5675.ngrok-free.app"
+        const val DEFAULT_BASE_URL = "https://bl-226178fb7921413cab6e2f261d27f9c2.ecs.us-east-1.on.aws"
     }
 }
 
