@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
                             pendingCount = repository.getPendingMessages().size
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
-                            feedback = "Historico atualizado pelo Aiven."
+                            feedback = "Historico atualizado pelo servidor."
                         } catch (e: Exception) {
                             pendingCount = repository.getPendingMessages().size
                             feedback = "Nao foi possivel consultar o servidor: ${e.message ?: "erro desconhecido"}"
@@ -1036,7 +1036,7 @@ fun ManualResultCard(result: FraudAnalysisResult) {
         )
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            text = "Gravado no historico oficial do Aiven.",
+            text = "Gravado no historico oficial.",
             color = BlessSafe,
             style = MaterialTheme.typography.bodySmall
         )

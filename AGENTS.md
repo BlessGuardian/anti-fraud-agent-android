@@ -4,7 +4,7 @@
 
 Repositorio Android do BlessGuardian / AntiFraud Agent.
 
-Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens suspeitas em tempo real, enviar ao backend FastAPI e consultar historico oficial no Aiven.
+Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens suspeitas em tempo real, enviar ao backend FastAPI hospedado em AWS ECS e consultar historico oficial no DynamoDB.
 
 ## Contexto tecnico
 
@@ -14,7 +14,7 @@ Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens s
 - Target SDK: API 36
 - Package: `com.example.antifraudagent`
 - Banco local: Room/SQLite apenas como fila offline
-- Branch de referencia atual: `refactor/offline-queue-history`
+- Branch de referencia atual: `refactor/aws-migration`
 
 ## Arquitetura atual
 
@@ -31,7 +31,7 @@ Mensagem capturada
 -> filtro minimo local
 -> se online: POST /detect
 -> se offline: Room PENDING
--> backend grava no Aiven
+-> backend grava no DynamoDB
 -> historico vem de GET /logs?device_id=...
 ```
 
@@ -43,7 +43,7 @@ O Android deve enviar:
 {
   "device_id": "uuid-anonimo-do-aparelho",
   "message_content": "texto da mensagem capturada",
-  "source": "SMS"
+  "source": "sms"
 }
 ```
 
@@ -51,8 +51,8 @@ Regras:
 
 - Usar `device_id`, nunca `user_id`, no payload novo.
 - `device_id` vem de `DeviceIdentityProvider`.
-- `source` deve ser `SMS`, `WHATSAPP`, `TELEGRAM`, `INSTAGRAM`, `MANUAL` ou `UNKNOWN`.
-- `FraudApiClient.DEFAULT_BASE_URL` deve ser validado antes de testes, pois ngrok muda.
+- `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual` ou `unknown`.
+- `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint AWS ECS fixo (`bl-*.ecs.us-east-1.on.aws`).
 
 ## Room / SQLite
 
@@ -61,7 +61,7 @@ Room nao e historico oficial.
 Use Room apenas para:
 
 - guardar mensagens `PENDING` quando nao ha internet;
-- manter mensagens que falharam ao gravar no Aiven;
+- manter mensagens que falharam ao gravar no historico oficial;
 - reenviar pendencias quando a conexao voltar.
 
 Remover uma mensagem do Room somente quando a resposta do backend trouxer:
@@ -104,7 +104,7 @@ A tela principal deve:
 - Reonline processa fila pendente.
 - Pendencia so sai do Room com `status_db=true`.
 - `Atualizar` consulta `/logs?device_id=...`.
-- `Alertas gravados` mostra dados vindos do Aiven/backend.
+- `Alertas gravados` mostra dados vindos do backend AWS (DynamoDB).
 
 ## Formato esperado de resposta
 

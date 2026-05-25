@@ -34,7 +34,7 @@ class MessageRepository(context: Context) {
     /**
      * Ponto de entrada dos servicos de captura.
      *
-     * Com internet, envia direto ao servidor, que grava no Aiven.
+     * Com internet, envia direto ao servidor, que persiste o registro no historico oficial.
      * Sem internet, salva no Room apenas como fila PENDING de envio.
      */
     suspend fun saveIfSuspicious(
@@ -87,7 +87,7 @@ class MessageRepository(context: Context) {
             )
 
             if (!result.dbSynced) {
-                throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no Aiven")
+                throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no historico oficial")
             }
 
             result
@@ -123,7 +123,7 @@ class MessageRepository(context: Context) {
         )
 
         if (!result.dbSynced) {
-            throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no Aiven")
+            throw IOException("Servidor analisou a mensagem, mas nao confirmou gravacao no historico oficial")
         }
 
         if (result.isFraud) {
