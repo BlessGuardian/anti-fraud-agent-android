@@ -80,9 +80,16 @@ usuario troca de app dentro dessa janela (ex: voltar ao BlessGuardian, abrir
 notificacao de Google News). Eventos com `packageName == BuildConfig.APPLICATION_ID`
 sao tambem ignorados como defesa em profundidade.
 
+Nota de build: o uso de `BuildConfig.APPLICATION_ID` exige `buildConfig = true`
+em `app/build.gradle.kts` -> `buildFeatures`. Desde AGP 8 essa classe nao e
+mais gerada por default; sem a flag o `compileDebugKotlin` falha com
+`Unresolved reference 'BuildConfig'`.
+
 ## Contrato com backend
 
-O Android deve enviar:
+### POST /detect
+
+Payload enviado pelo Android:
 
 ```json
 {
@@ -92,12 +99,63 @@ O Android deve enviar:
 }
 ```
 
+Resposta esperada (status 201):
+
+```json
+{
+  "status_db": true,
+  "user_id": "uuid-v5-derivado-do-device-id",
+  "analise": {
+    "tentativa_fraude": true,
+    "score": 0.87,
+    "categoria": "phishing",
+    "indicadores": ["link encurtado", "urgencia"],
+    "veredito_curto": "Provavel golpe de phishing"
+  }
+}
+```
+
 Regras:
 
 - Usar `device_id`, nunca `user_id`, no payload novo.
 - `device_id` vem de `DeviceIdentityProvider`.
-- `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual` ou `unknown`.
+- `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual` ou `unknown`. `FraudApiClient` aplica `source.name.lowercase()` automaticamente.
 - `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint AWS ECS fixo (`bl-*.ecs.us-east-1.on.aws`).
+- O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). Android nunca cria nem envia `user_id`.
+
+### GET /logs
+
+Consulta o historico oficial. Query params:
+
+- `device_id` (obrigatorio na pratica para evitar scan caro)
+- `limit` (default 50)
+- `offset` (default 0)
+
+Resposta (status 200):
+
+```json
+{
+  "status": "success",
+  "total_logs": 42,
+  "data": [
+    {
+      "id": "uuid-v4",
+      "user_id": "uuid-v5",
+      "device_id": "...",
+      "content": "...",
+      "source": "whatsapp",
+      "is_fraud": true,
+      "risk_score": 0.87,
+      "explanation": "...",
+      "detected_at": "2026-05-25T14:41:15.517122+00:00"
+    }
+  ]
+}
+```
+
+### GET /health
+
+`{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
 
 ## Room / SQLite
 
@@ -124,9 +182,14 @@ A tela principal deve:
 - usar navegacao inferior com `Inicio`, `Historico`, `Analisar` e `Perfil`;
 - mostrar indice de vulnerabilidade, mensagens analisadas e golpes bloqueados;
 - mostrar quantidade de pendencias offline;
-- ter aba `Analisar` para envio manual de mensagens suspeitas com `source=MANUAL`;
+- ter aba `Analisar` para envio manual de mensagens suspeitas com `source=manual`;
 - consultar historico oficial via `GET /logs?device_id=...`;
 - nao usar Room como fonte do historico.
+
+O `vulnerability_score` exibido no `VulnerabilityCard` e calculado **client-side**
+em `MainActivity.kt` a partir da media de `risk_score` dos logs retornados pelo
+backend (`logs.map { riskScore }.average()`). Nao existe endpoint que devolva
+esse agregado; nao tentar buscar do backend.
 
 ## Analise manual
 
@@ -136,11 +199,27 @@ A aba `Analisar` chama `POST /detect` com:
 {
   "device_id": "uuid-anonimo-do-aparelho",
   "message_content": "texto colado pelo usuario",
-  "source": "MANUAL"
+  "source": "manual"
 }
 ```
 
 Como o endpoint `/detect` persiste no DynamoDB, a analise manual entra no historico oficial e deve aparecer depois na aba `Historico`.
+
+## Build
+
+Quebras de build conhecidas e como evitar:
+
+- **Alinhamento Kotlin x KSP**: em `gradle/libs.versions.toml`, a versao do KSP
+  segue o formato `<versao-kotlin>-<versao-ksp>` (ex: `2.0.21-1.0.28`). Usar um
+  KSP de outro branch do Kotlin causa `[ksp] IllegalStateException: unexpected
+  jvm signature V` no `:app:kspDebugKotlin`.
+- **`buildConfig = true`**: obrigatorio em `app/build.gradle.kts` -> `buildFeatures`
+  porque o codigo usa `BuildConfig.APPLICATION_ID`. AGP 8+ nao gera mais a classe
+  por default.
+- **AGP Upgrade Assistant**: o Android Studio pode propor bumpar AGP/Gradle/Kotlin
+  de uma vez (`gradle.properties`, `gradle-wrapper.properties`, `libs.versions.toml`).
+  Nao aceitar sem PR e revisao da equipe. Se cair em estado inconsistente, reverter
+  com `git restore gradle.properties gradle/libs.versions.toml gradle/wrapper/gradle-wrapper.properties`.
 
 ## Regras criticas
 
@@ -153,6 +232,7 @@ Como o endpoint `/detect` persiste no DynamoDB, a analise manual entra no histor
 - Preservar debounce/deduplicacao do `FraudAccessibilityService`.
 - Nao adicionar `<?xml version="1.0"?>` em `accessibility_service_config.xml`.
 - Captura passiva, analise manual e fila offline respeitam `SettingsRepository.isCaptureEnabled()`. Nao bypassar essa flag em novos pontos de envio.
+- `vulnerability_score` e client-side; nao migrar para o backend sem decisao explicita da equipe.
 
 ## Checklist antes de entregar
 
