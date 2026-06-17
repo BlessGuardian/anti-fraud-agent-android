@@ -142,7 +142,7 @@ Além disso, o usuário deve habilitar manualmente:
 
 1. Clone o repositório
 ```bash
-git clone https://github.com/BlessGuard/anti-fraud-agent-android.git
+git clone https://github.com/BlessGuardian/anti-fraud-agent-android.git
 ```
 
 2. Abra no **Android Studio**
@@ -159,7 +159,7 @@ git clone https://github.com/BlessGuard/anti-fraud-agent-android.git
 
 ## Repositório relacionado
 
-Este repositório contém apenas o app Android. O servidor Python (FastAPI + AWS) e o painel de inteligência coletiva (Streamlit) estão em repositório separado na organização [BlessGuard](https://github.com/BlessGuard).
+Este repositório contém apenas o app Android. O servidor Python (FastAPI + AWS) e o painel de inteligência coletiva (Streamlit) estão em repositório separado na organização [BlessGuardian](https://github.com/BlessGuardian).
 
 ---
 

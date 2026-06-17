@@ -4,7 +4,7 @@
 
 Repositorio Android do BlessGuardian / AntiFraud Agent.
 
-Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens suspeitas em tempo real, enviar ao backend FastAPI hospedado em AWS ECS e consultar historico oficial no DynamoDB.
+Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens suspeitas em tempo real, enviar ao backend FastAPI (AWS API Gateway + Lambda) e consultar historico oficial no DynamoDB.
 
 ## Contexto tecnico
 
@@ -120,7 +120,7 @@ Regras:
 - Usar `device_id`, nunca `user_id`, no payload novo.
 - `device_id` vem de `DeviceIdentityProvider`.
 - `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual` ou `unknown`. `FraudApiClient` aplica `source.name.lowercase()` automaticamente.
-- `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint AWS ECS fixo (`bl-*.ecs.us-east-1.on.aws`).
+- `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint do backend no AWS API Gateway (`*.execute-api.us-east-1.amazonaws.com`), apos a migracao de ECS para API Gateway + Lambda.
 - O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). Android nunca cria nem envia `user_id`.
 
 ### GET /logs

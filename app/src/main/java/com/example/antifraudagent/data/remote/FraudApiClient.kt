@@ -143,7 +143,7 @@ class FraudApiClient(
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://bl-226178fb7921413cab6e2f261d27f9c2.ecs.us-east-1.on.aws"
+        const val DEFAULT_BASE_URL = "https://e5skpalp7g.execute-api.us-east-1.amazonaws.com"
     }
 }
 
