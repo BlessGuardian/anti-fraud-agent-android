@@ -97,6 +97,10 @@ object LocalMessagePreprocessor {
             .replace('\t', ' ')
             .replace('\r', ' ')
             .replace('\n', ' ')
+            // Remove caracteres invisiveis/de formatacao (zero-width space, ZWNJ/ZWJ,
+            // BOM, soft hyphen, controles). Golpistas usam esses chars para quebrar
+            // palavras (ex: "p<zwsp>ix") e escapar da deteccao de sinal relevante.
+            .replace(INVISIBLE_CHARS_REGEX, "")
             .replace(Regex(" {2,}"), " ")
             .trim()
 
@@ -123,14 +127,23 @@ object LocalMessagePreprocessor {
     }
 
     private fun hasRelevantContentSignal(text: String): Boolean {
-        val lower = text.lowercase()
-        return RELEVANT_CONTENT_SIGNALS.any { lower.contains(it) }
+        val folded = foldForMatching(text)
+        return RELEVANT_CONTENT_SIGNALS.any { folded.contains(foldForMatching(it)) }
     }
+
+    /**
+     * Minusculiza e remove acentos para comparacao robusta de sinais relevantes
+     * (ex: "codigo" casa com "código", "cartao" com "cartão"). Erra para o lado
+     * de preservar a mensagem: sinal a mais nunca descarta, so evita descarte.
+     */
+    private fun foldForMatching(text: String): String =
+        java.text.Normalizer
+            .normalize(text.lowercase(), java.text.Normalizer.Form.NFD)
+            .replace(DIACRITICS_REGEX, "")
 
     private fun buildFingerprint(text: String): String =
         text.lowercase()
             .replace(Regex("[^\\p{L}\\p{Nd}]"), "")
-            .take(160)
 
     private fun evictExpired(currentTimeMs: Long) {
         val iterator = dedupCache.entries.iterator()
@@ -143,6 +156,13 @@ object LocalMessagePreprocessor {
             }
         }
     }
+
+    // \p{Cf} cobre zero-width space/ZWNJ/ZWJ/word-joiner/BOM/soft-hyphen;
+    // \p{Cc} cobre demais caracteres de controle.
+    private val INVISIBLE_CHARS_REGEX = Regex("""[\p{Cf}\p{Cc}]""")
+
+    // Marcas diacriticas combinantes (acentos) apos normalizacao NFD.
+    private val DIACRITICS_REGEX = Regex("""\p{Mn}+""")
 
     private val TIME_ONLY_REGEX =
         Regex("""^\d{1,2}:\d{2}(:\d{2})?(\s*(AM|PM|am|pm))?$""")
@@ -176,6 +196,8 @@ object LocalMessagePreprocessor {
     private val SYSTEM_SUBSTRING_PATTERNS = listOf(
         "backup em andamento", "fazendo backup", "backup concluido",
         "backup concluído", "backup pendente",
+        "preparando backup", "preparando o backup", "backup em progresso",
+        "restaurando backup", "restaurando mensagens", "atualizando backup",
         "sincronizando mensagens", "sincronizacao concluida",
         "sincronização concluída", "sincronizando backup",
         "whatsapp web ativo", "whatsapp web conectado",

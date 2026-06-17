@@ -25,6 +25,39 @@ class FraudAccessibilityService : AccessibilityService() {
         private const val MIN_MESSAGE_LENGTH = 3
         private const val MAX_SEEN_SIZE = 500
 
+        // Liga o log do par (viewId -> texto) de cada no folha capturado.
+        // Use em device com `adb logcat -s FraudAccessibility` para descobrir os
+        // viewIds reais de nome de contato / titulo em cada app e estender
+        // NOISE_VIEW_IDS abaixo. Manter false em producao.
+        private const val DEBUG_CAPTURE = false
+
+        // DENYLIST de viewIds que sao ruido estrutural (nome do contato, titulo da
+        // conversa, status "visto por ultimo", caixa de digitacao, barra de busca).
+        // Estrategia subtrativa e fail-open: so REMOVE nos sabidamente ruido; nunca
+        // restringe a captura, entao um id desatualizado no maximo deixa o ruido
+        // passar de novo — jamais descarta uma mensagem real.
+        // Verificar/estender por device (DEBUG_CAPTURE + Layout Inspector).
+        private val NOISE_VIEW_IDS = setOf(
+            // WhatsApp
+            "com.whatsapp:id/conversation_contact_name",
+            "com.whatsapp:id/conversation_contact_status",
+            "com.whatsapp:id/conversation_contact_status_holder",
+            "com.whatsapp:id/entry",
+            "com.whatsapp:id/search_src_text",
+            // Telegram
+            "org.telegram.messenger:id/action_bar_title",
+            // Instagram Direct
+            "com.instagram.android:id/thread_title",
+            "com.instagram.android:id/action_bar_title",
+            "com.instagram.android:id/row_thread_composer_edittext",
+            // Google Messages
+            "com.google.android.apps.messaging:id/conversation_title",
+            "com.google.android.apps.messaging:id/compose_message_text",
+            // Samsung Messages
+            "com.samsung.android.messaging:id/title",
+            "com.samsung.android.messaging:id/message_edit_text"
+        )
+
         fun isEnabled(context: Context): Boolean {
             val expected = ComponentName(context, FraudAccessibilityService::class.java)
             val flat = Settings.Secure.getString(
@@ -139,7 +172,14 @@ class FraudAccessibilityService : AccessibilityService() {
         if (node == null) return
         val text = node.text?.toString()?.trim()
         if (node.childCount == 0 && !text.isNullOrBlank() && text.length >= MIN_MESSAGE_LENGTH) {
-            if (!isUiChrome(text)) results.add(text)
+            val viewId = node.viewIdResourceName
+            if (DEBUG_CAPTURE) Log.d(TAG, "leaf id=$viewId text=\"$text\"")
+            // Ruido estrutural conhecido (nome do contato, titulo, caixa de digitacao):
+            // descarta o no, mas segue descendo na arvore por seguranca.
+            val isStructuralNoise = viewId != null && viewId in NOISE_VIEW_IDS
+            if (!isStructuralNoise && !isUiChrome(text)) {
+                results.add(text)
+            }
         }
         for (i in 0 until node.childCount) {
             collectMessages(node.getChild(i), results)

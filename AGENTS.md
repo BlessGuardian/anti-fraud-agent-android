@@ -46,6 +46,9 @@ Classe: `LocalMessagePreprocessor` (Kotlin `object`, estado compartilhado entre 
 Responsabilidade: higiene de dados antes de chegar ao backend.
 
 - Normaliza espacos, tabs e quebras de linha.
+- Remove caracteres invisiveis/de formatacao (zero-width space, ZWNJ/ZWJ, BOM,
+  soft hyphen, controles) usados para quebrar palavras e escapar da deteccao
+  (ex: `p<zwsp>ix` -> `pix`).
 - Rejeita texto vazio apos normalizacao.
 - Rejeita horario isolado (ex: `12:35`, `08:01 AM`).
 - Rejeita data ou separador de chat (ex: `Hoje`, `Ontem`, `25/12`, `12 de maio`).
@@ -55,9 +58,13 @@ Responsabilidade: higiene de dados antes de chegar ao backend.
 - Rejeita texto que seja exatamente igual ao nome do remetente.
 - Rejeita texto muito curto (< 10 chars) sem sinais de conteudo relevante
   (link, Pix, CPF, banco, senha, codigo, boleto, valor em R$, urgencia financeira).
+  A deteccao de sinal relevante e insensivel a acento (ex: `codigo`/`código`,
+  `premio`/`prêmio`), errando sempre para o lado de preservar a mensagem.
 - Deduplica capturas com mesmo conteudo normalizado dentro de janela de 15s,
   evitando que NotificationListener e AccessibilityService enviem a mesma
-  mensagem duas vezes.
+  mensagem duas vezes. O fingerprint usa o conteudo normalizado COMPLETO (sem
+  truncamento), para nao colapsar mensagens distintas que compartilham um
+  prefixo longo (ex: template de golpe com link/conta no final).
 
 Retorno: `PreprocessResult.Accepted(normalizedText)` ou `PreprocessResult.Rejected(reason)`.
 
@@ -84,6 +91,21 @@ Nota de build: o uso de `BuildConfig.APPLICATION_ID` exige `buildConfig = true`
 em `app/build.gradle.kts` -> `buildFeatures`. Desde AGP 8 essa classe nao e
 mais gerada por default; sem a flag o `compileDebugKotlin` falha com
 `Unresolved reference 'BuildConfig'`.
+
+### Filtro de ruido estrutural por viewId
+
+`collectMessages` varre os nos folha da janela. Para nao capturar nome de
+contato, titulo da conversa, status e caixa de digitacao como se fossem
+mensagens, ele consulta `node.viewIdResourceName` contra a DENYLIST
+`NOISE_VIEW_IDS` e descarta os nos conhecidos como ruido. Requer
+`flagReportViewIds` no `accessibility_service_config.xml` (ja ativo).
+
+Estrategia subtrativa e **fail-open**: a lista so REMOVE nos sabidamente ruido,
+nunca restringe a captura a uma allowlist. Logo, um viewId desatualizado no
+maximo deixa o ruido voltar a passar — jamais descarta uma mensagem real
+(garante a regra de "nao pular mensagem relevante"). Os ids variam por app/versao;
+ative `DEBUG_CAPTURE` e use `adb logcat -s FraudAccessibility` para ver o par
+`viewId -> texto` em device e estender a lista.
 
 ## Contrato com backend
 
