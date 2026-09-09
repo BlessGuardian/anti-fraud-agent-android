@@ -14,6 +14,7 @@ import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import com.example.antifraudagent.data.settings.SettingsRepository
+import com.example.antifraudagent.calls.SuspiciousMessageAlert
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -156,6 +157,7 @@ class MessageRepository(context: Context) {
 
         if (result.isFraud) {
             Log.d(TAG, "Fraude detectada pelo servidor | score=${result.score} | dbSynced=${result.dbSynced}")
+            SuspiciousMessageAlert.show(appContext, result)
         } else {
             Log.d(TAG, "Servidor descartou mensagem online")
         }

@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.app.role.RoleManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -82,6 +85,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
+import com.example.antifraudagent.data.local.call.CallTranscript
+import com.example.antifraudagent.calls.CallProtectionSnapshot
+import com.example.antifraudagent.calls.CallProtectionState
+import com.example.antifraudagent.calls.CallRecordingService
+import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.services.FraudAccessibilityService
@@ -111,6 +119,7 @@ class MainActivity : ComponentActivity() {
 
     private var isNotificationEnabled by mutableStateOf(false)
     private var isAccessibilityEnabled by mutableStateOf(false)
+    private var isCallScreeningEnabled by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -121,6 +130,18 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private val callPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.all { it }) {
+            CallRecordingService.start(this)
+        }
+    }
+
+    private val callScreeningLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { refreshCallScreeningState() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +154,8 @@ class MainActivity : ComponentActivity() {
                 val repository = remember { MessageRepository(applicationContext) }
                 val settings = remember { SettingsRepository.getInstance(applicationContext) }
                 val captureEnabled by settings.captureEnabled.collectAsState()
+                val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
+                val liveCall by CallProtectionState.state.collectAsState()
                 val scope = rememberCoroutineScope()
                 var selectedTab by remember { mutableStateOf(AppTab.Home) }
                 var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
@@ -143,6 +166,15 @@ class MainActivity : ComponentActivity() {
                 var manualResult by remember { mutableStateOf<FraudAnalysisResult?>(null) }
                 var manualError by remember { mutableStateOf<String?>(null) }
                 var isAnalyzing by remember { mutableStateOf(false) }
+                var callTranscripts by remember { mutableStateOf<List<CallTranscript>>(emptyList()) }
+
+                fun refreshCallTranscripts() {
+                    scope.launch {
+                        val callRepository = CallTranscriptRepository(applicationContext)
+                        callRepository.retryPending()
+                        callTranscripts = callRepository.list()
+                    }
+                }
 
                 fun refreshData() {
                     scope.launch {
@@ -190,6 +222,11 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     refreshData()
+                    refreshCallTranscripts()
+                }
+
+                LaunchedEffect(liveCall.active, liveCall.status) {
+                    if (!liveCall.active && liveCall.transcript.isNotBlank()) refreshCallTranscripts()
                 }
 
                 BlessGuardianApp(
@@ -211,16 +248,28 @@ class MainActivity : ComponentActivity() {
                     onRefresh = { refreshData() },
                     onRequestNotification = { openNotificationListenerSettings() },
                     onRequestAccessibility = { openAccessibilitySettings() },
-                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) }
+                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
+                    callProtectionEnabled = callProtectionEnabled,
+                    callScreeningEnabled = isCallScreeningEnabled,
+                    callOverlayEnabled = Settings.canDrawOverlays(this@MainActivity),
+                    liveCall = liveCall,
+                    callTranscripts = callTranscripts,
+                    onCallProtectionEnabledChange = { settings.setCallProtectionEnabled(it) },
+                    onStartCallProtection = { startCallProtection() },
+                    onRequestCallScreening = { requestCallScreeningRole() },
+                    onRequestCallOverlay = { requestCallOverlayPermission() },
+                    onRefreshCallTranscripts = { refreshCallTranscripts() }
                 )
             }
         }
+        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
     }
 
     override fun onResume() {
         super.onResume()
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
+        refreshCallScreeningState()
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -257,12 +306,52 @@ class MainActivity : ComponentActivity() {
     private fun openAccessibilitySettings() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
+
+    private fun startCallProtection() {
+        val permissions = listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
+        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (permissions.isEmpty()) {
+            CallRecordingService.start(this)
+        } else {
+            callPermissionLauncher.launch(permissions.toTypedArray())
+        }
+    }
+
+    private fun requestCallScreeningRole() {
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (!roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
+            callScreeningLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
+        }
+    }
+
+    private fun refreshCallScreeningState() {
+        val roleManager = getSystemService(RoleManager::class.java)
+        isCallScreeningEnabled = roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)
+    }
+
+    private fun requestCallOverlayPermission() {
+        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
+    }
+
+    companion object {
+        const val ACTION_START_CALL_PROTECTION = "com.example.antifraudagent.action.START_CALL_PROTECTION_FROM_UI"
+        const val ACTION_OPEN_CALLS = "com.example.antifraudagent.action.OPEN_CALLS"
+    }
 }
 
 enum class AppTab(val label: String, val icon: ImageVector) {
     Home("Inicio", Icons.Filled.Security),
     History("Historico", Icons.Filled.History),
     Analyze("Analisar", Icons.Filled.Search),
+    Calls("Ligacoes", Icons.Filled.Phone),
     Profile("Perfil", Icons.Filled.Person)
 }
 
@@ -299,7 +388,17 @@ fun BlessGuardianApp(
     onRefresh: () -> Unit,
     onRequestNotification: () -> Unit,
     onRequestAccessibility: () -> Unit,
-    onCaptureEnabledChange: (Boolean) -> Unit
+    onCaptureEnabledChange: (Boolean) -> Unit,
+    callProtectionEnabled: Boolean,
+    callScreeningEnabled: Boolean,
+    callOverlayEnabled: Boolean,
+    liveCall: CallProtectionSnapshot,
+    callTranscripts: List<CallTranscript>,
+    onCallProtectionEnabledChange: (Boolean) -> Unit,
+    onStartCallProtection: () -> Unit,
+    onRequestCallScreening: () -> Unit,
+    onRequestCallOverlay: () -> Unit,
+    onRefreshCallTranscripts: () -> Unit
 ) {
     Scaffold(
         containerColor = BlessBackground,
@@ -337,6 +436,20 @@ fun BlessGuardianApp(
                 isAnalyzing = isAnalyzing,
                 onManualTextChange = onManualTextChange,
                 onAnalyzeManual = onAnalyzeManual
+            )
+
+            AppTab.Calls -> CallProtectionScreen(
+                padding = padding,
+                enabled = callProtectionEnabled,
+                screeningEnabled = callScreeningEnabled,
+                overlayEnabled = callOverlayEnabled,
+                liveCall = liveCall,
+                transcripts = callTranscripts,
+                onEnabledChange = onCallProtectionEnabledChange,
+                onStart = onStartCallProtection,
+                onRequestScreening = onRequestCallScreening,
+                onRequestOverlay = onRequestCallOverlay,
+                onRefresh = onRefreshCallTranscripts
             )
 
             AppTab.Profile -> ProfileScreen(

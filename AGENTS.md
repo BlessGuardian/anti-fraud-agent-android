@@ -121,6 +121,21 @@ Payload enviado pelo Android:
 }
 ```
 
+### Chamadas transcritas
+
+A aba `Ligacoes` usa `CallScreeningService` somente para oferecer ao usuário a
+abertura da proteção. Ela não bloqueia ou encerra chamadas. Ao iniciar uma sessão
+visível, `CallRecordingService` roda como foreground service de microfone,
+transcreve o áudio acústico capturado no viva-voz e envia apenas a transcrição
+consolidada ao término com `source=call`.
+
+- O áudio bruto é temporário, interno ao app e removido quando a sessão termina.
+- A transcrição final fica em `call_transcripts` no Room e pode ser reenviada.
+- O overlay de alerta requer a concessão explícita de “exibir sobre outros apps”.
+- `VOICE_CALL` e `CAPTURE_AUDIO_OUTPUT` não são caminhos válidos para app comum;
+  não prometer captura direta dos dois lados em todos os modelos Android.
+- O alerta de risco alto pode ser fechado para que o usuário continue a chamada.
+
 Resposta esperada (status 201):
 
 ```json
