@@ -13,12 +13,20 @@
     <!-- Permissão de notificações (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
-    <!-- Protecao de chamadas: o usuario habilita estas permissoes separadamente. -->
+    <!-- Protecao de chamadas: microfone + estado do telefone (detectar atendimento/fim). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!-- Android 11+: necessario para enxergar o servico de reconhecimento de voz do sistema. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".AntiFraudAgentApp"

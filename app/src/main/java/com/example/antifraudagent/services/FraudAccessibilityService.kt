@@ -3,6 +3,7 @@ package com.example.antifraudagent.services
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -11,6 +12,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.example.antifraudagent.BuildConfig
+import com.example.antifraudagent.calls.CallStateMonitor
 import com.example.antifraudagent.data.repository.MessageRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,14 @@ class FraudAccessibilityService : AccessibilityService() {
         // viewIds reais de nome de contato / titulo em cada app e estender
         // NOISE_VIEW_IDS abaixo. Manter false em producao.
         private const val DEBUG_CAPTURE = false
+
+        /**
+         * Instancia conectada. A protecao de chamadas usa este contexto para desenhar avisos
+         * TYPE_ACCESSIBILITY_OVERLAY sobre a tela da ligacao.
+         */
+        @Volatile
+        var instance: FraudAccessibilityService? = null
+            private set
 
         // DENYLIST de viewIds que sao ruido estrutural (nome do contato, titulo da
         // conversa, status "visto por ultimo", caixa de digitacao, barra de busca).
@@ -93,11 +103,25 @@ class FraudAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
 
     private lateinit var repository: MessageRepository
+    private var callStateMonitor: CallStateMonitor? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         repository = MessageRepository(applicationContext)
+        instance = this
+        // O sistema mantem este servico ligado: e daqui que a protecao de chamadas fica armada.
+        callStateMonitor = CallStateMonitor(this).also { it.start() }
         Log.d(TAG, "AccessibilityService conectado ✅")
+    }
+
+    /** Rearma depois que o usuario concede READ_PHONE_STATE com o servico ja conectado. */
+    fun rearmCallProtection() {
+        callStateMonitor?.start()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        releaseCallProtection()
+        return super.onUnbind(intent)
     }
 
     override fun onInterrupt() {
@@ -106,10 +130,17 @@ class FraudAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        releaseCallProtection()
         super.onDestroy()
         cancelDebounce()
         serviceJob.cancel()
         seenMessages.clear()
+    }
+
+    private fun releaseCallProtection() {
+        callStateMonitor?.stop()
+        callStateMonitor = null
+        if (instance === this) instance = null
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

@@ -130,20 +130,49 @@ Payload enviado pelo Android:
 }
 ```
 
-### Chamadas transcritas
+### Proteção de ligações (automática)
 
-A aba `Ligacoes` usa `CallScreeningService` somente para oferecer ao usuário a
-abertura da proteção. Ela não bloqueia ou encerra chamadas. Ao iniciar uma sessão
-visível, `CallRecordingService` roda como foreground service de microfone,
-transcreve o áudio acústico capturado no viva-voz e envia apenas a transcrição
-consolidada ao término com `source=call`.
+Não existe botão de iniciar. A proteção fica armada e só capta áudio em ligação **recebida e atendida**.
 
-- O áudio bruto é temporário, interno ao app e removido quando a sessão termina.
-- A transcrição final fica em `call_transcripts` no Room e pode ser reenviada.
-- O overlay de alerta requer a concessão explícita de “exibir sobre outros apps”.
-- `VOICE_CALL` e `CAPTURE_AUDIO_OUTPUT` não são caminhos válidos para app comum;
-  não prometer captura direta dos dois lados em todos os modelos Android.
-- O alerta de risco alto pode ser fechado para que o usuário continue a chamada.
+```text
+FraudAccessibilityService.onServiceConnected
+-> CallStateMonitor (TelephonyCallback, uma por SIM ativo; precisa READ_PHONE_STATE)
+-> RINGING -> OFFHOOK = recebida e atendida (IDLE -> OFFHOOK = feita pelo usuario: ignorada)
+-> CallOverlays.showSpeakerPrompt ("Ative o viva-voz") ANTES de iniciar o servico
+-> CallRecordingService (FGS microphone) -> CallAudioCapture (AudioRecord VOICE_RECOGNITION 16 kHz)
+-> pipe -> CallSpeechTranscriber (SpeechRecognizer + EXTRA_AUDIO_SOURCE + EXTRA_SEGMENTED_SESSION)
+-> cada trecho: CallRiskRules (alerta local imediato) + checkpoints POST /detect source=call
+-> IDLE: para captura/transcricao, analise final, registro em call_transcripts (Room v3)
+```
+
+Por que assim (AOSP `AudioPolicyService::updateUidStates_l`, CDD 5.4.5):
+
+- Durante ligação de operadora o Android silencia a captura de apps comuns. A exceção é o **uid com
+  serviço de acessibilidade ativo**, e só com a fonte `VOICE_RECOGNITION`. Por isso a acessibilidade
+  é requisito da proteção de ligações; `MIC`, `VOICE_COMMUNICATION`, `VOICE_CALL` não servem.
+- O `SpeechRecognizer` grava no processo do reconhecedor (outro uid) e seria silenciado: nunca deixe
+  ele abrir o microfone durante a ligação. Quem grava é o app; o reconhecedor recebe o PCM pelo pipe.
+- Só há um cliente de microfone (sem `MediaRecorder` junto). Nenhum áudio é salvo em disco.
+- O vínculo da acessibilidade (BIND_ALLOW_BACKGROUND_ACTIVITY_STARTS) e o aviso visível do viva-voz
+  liberam o FGS de microfone em segundo plano (Android 14+). Mesmo assim `startForeground` fica em try/catch.
+- App comum não consegue ligar o viva-voz de ligação de operadora: só sugerir. A rota é lida por
+  `AudioManager.getCommunicationDevice()` (+ `isSpeakerphoneOn`) e o aviso some quando vira alto-falante.
+- `CallScreeningService` só guarda o número (não recebe contatos/números ocultos): não é gatilho.
+
+Regras de análise (cada POST /detect grava um registro no DynamoDB):
+
+- Alerta local imediato quando `CallRiskRules` chega a HIGH (combinação de categorias).
+- No máximo 2 checkpoints por ligação (+1 final), um por vez: escalada (risco local MEDIUM e >= 12
+  palavras) ou periódico (>= 60 s e >= 40 palavras novas). Para de enviar quando o servidor confirma golpe.
+- Final só se nada foi enviado ou houver >= 5 palavras novas; conversa com < 8 palavras fica só no aparelho.
+- Kill switch do Perfil (`capture_enabled`) desliga os envios; a análise local continua.
+- Reenvio automático só para falha de conexão (`PENDING`). Timeout/5xx/envio interrompido = `FAILED`
+  (pode ter gravado no servidor; não repetir).
+- Pop-up de golpe: `TYPE_ACCESSIBILITY_OVERLAY` (fallback `TYPE_APPLICATION_OVERLAY`), notificação de
+  alta prioridade e vibração. O alerta é fechável e nunca é desfeito por uma análise "segura" posterior.
+
+Pendências para o backend (Mitchell): aceitar `session_id` para fazer upsert dos checkpoints da mesma
+ligação e persistir `raciocinio`/`indicadores` (hoje só `veredito_curto` vai para `explanation`).
 
 Resposta esperada (status 201):
 
@@ -274,7 +303,7 @@ Quebras de build conhecidas e como evitar:
 - Nao remover fila offline sem alternativa.
 - Nao logar mensagens sensiveis inteiras em producao.
 - Nao ampliar permissoes Android sem justificar impacto ao usuario.
-- Nao prometer captura de audio de chamadas como implementada.
+- Captura de ligacao depende do viva-voz e da acessibilidade ativa; testar em aparelho real (Samsung pode diferir do AOSP).
 - Preservar debounce/deduplicacao do `FraudAccessibilityService`.
 - Nao adicionar `<?xml version="1.0"?>` em `accessibility_service_config.xml`.
 - Captura passiva, analise manual e fila offline respeitam `SettingsRepository.isCaptureEnabled()`. Nao bypassar essa flag em novos pontos de envio.

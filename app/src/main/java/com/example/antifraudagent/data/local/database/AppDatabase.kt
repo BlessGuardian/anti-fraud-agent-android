@@ -36,7 +36,7 @@ class Converters {
 
 @Database(
     entities = [AnalyzedMessage::class, CallTranscript::class],
-    version  = 2,
+    version  = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -60,7 +60,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "antifraud_database"
-                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
             }
         }
 
@@ -74,6 +74,26 @@ abstract class AppDatabase : RoomDatabase() {
                         "`syncStatus` TEXT NOT NULL, `syncError` TEXT, " +
                         "PRIMARY KEY(`sessionId`))"
                 )
+            }
+        }
+
+        /** v3: historico de ligacoes com numero, trecho do alerta, justificativa e sinais. */
+        private val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                listOf(
+                    "`callerNumber` TEXT",
+                    "`speakerUsed` INTEGER NOT NULL DEFAULT 0",
+                    "`verdict` TEXT",
+                    "`reasoning` TEXT",
+                    "`indicators` TEXT",
+                    "`localIndicators` TEXT",
+                    "`alertExcerpt` TEXT",
+                    "`alertAtMillis` INTEGER",
+                    "`alertSource` TEXT",
+                    "`captureIssue` TEXT"
+                ).forEach { column ->
+                    database.execSQL("ALTER TABLE `call_transcripts` ADD COLUMN $column")
+                }
             }
         }
     }
