@@ -43,10 +43,7 @@ fun CallProtectionScreen(
 ) {
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                title = "Ligacoes",
-                subtitle = "Transcreva chamadas no viva-voz e receba alertas de golpe"
-            )
+            PageIntro("Transcreva chamadas no viva-voz e receba alertas de golpe.")
         }
         item {
             GlassPanel {

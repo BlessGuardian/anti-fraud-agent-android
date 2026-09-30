@@ -29,6 +29,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -356,12 +358,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class AppTab(val label: String, val icon: ImageVector) {
-    Home("Inicio", Icons.Filled.Security),
-    History("Historico", Icons.Filled.History),
-    Analyze("Analisar", Icons.Filled.Search),
-    Calls("Ligacoes", Icons.Filled.Phone),
-    Profile("Perfil", Icons.Filled.Person)
+enum class AppTab(val label: String, val title: String, val icon: ImageVector) {
+    Home("Início", "BlessGuardian", Icons.Filled.Security),
+    History("Histórico", "Histórico", Icons.Filled.History),
+    Analyze("Analisar", "Análise", Icons.Filled.Search),
+    Calls("Ligações", "Ligações", Icons.Filled.Phone),
+    Profile("Perfil", "Perfil", Icons.Filled.Person)
 }
 
 enum class RiskFilter(val label: String) {
@@ -412,6 +414,15 @@ fun BlessGuardianApp(
 ) {
     Scaffold(
         containerColor = BlessBackground,
+        topBar = {
+            BlessTopBar(
+                selectedTab = selectedTab,
+                captureEnabled = captureEnabled,
+                pendingCount = pendingCount,
+                syncState = syncState,
+                onOpenProfile = { onTabSelected(AppTab.Profile) }
+            )
+        },
         bottomBar = {
             BlessBottomBar(
                 selectedTab = selectedTab,
@@ -423,9 +434,6 @@ fun BlessGuardianApp(
             AppTab.Home -> HomeScreen(
                 padding = padding,
                 logs = logs,
-                pendingCount = pendingCount,
-                syncState = syncState,
-                captureEnabled = captureEnabled,
                 isLoading = isLoading,
                 feedback = feedback,
                 onRefresh = onRefresh
@@ -510,9 +518,6 @@ fun BlessBottomBar(
 fun HomeScreen(
     padding: PaddingValues,
     logs: List<RemoteFraudLog>,
-    pendingCount: Int,
-    syncState: MessageRepository.SyncState,
-    captureEnabled: Boolean,
     isLoading: Boolean,
     feedback: String?,
     onRefresh: () -> Unit
@@ -528,13 +533,7 @@ fun HomeScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            BrandBar()
-            VulnerabilityCard(
-                score = vulnerability,
-                pendingCount = pendingCount,
-                syncState = syncState,
-                captureEnabled = captureEnabled
-            )
+            VulnerabilityCard(score = vulnerability)
         }
 
         item {
@@ -602,13 +601,6 @@ fun HistoryScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                title = "Historico",
-                subtitle = "Todas as mensagens analisadas"
-            )
-        }
-
-        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(RiskFilter.High, RiskFilter.Medium, RiskFilter.Safe).forEach { filter ->
                     RiskFilterChip(
@@ -664,10 +656,7 @@ fun AnalyzeScreen(
 ) {
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                title = "Analise Retroativa",
-                subtitle = "Cole uma mensagem suspeita para verificar"
-            )
+            PageIntro("Cole uma mensagem suspeita para verificar se é golpe.")
         }
 
         item {
@@ -775,10 +764,7 @@ fun ProfileScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                title = "Perfil",
-                subtitle = "Configure seu nivel de vigilancia"
-            )
+            PageIntro("Configure seu nível de vigilância.")
         }
 
         item {
@@ -892,7 +878,7 @@ fun ScreenColumn(
             .background(BlessBackground),
         contentPadding = PaddingValues(
             start = 24.dp,
-            top = padding.calculateTopPadding() + 28.dp,
+            top = padding.calculateTopPadding() + 8.dp,
             end = 24.dp,
             bottom = padding.calculateBottomPadding() + 24.dp
         ),
@@ -901,58 +887,135 @@ fun ScreenColumn(
     )
 }
 
+/**
+ * Topo fixo de todas as abas: logo + titulo da aba (na Inicio, o nome do app), status da
+ * protecao e acesso a conta. Fica no topBar do Scaffold, entao nao some ao rolar.
+ */
 @Composable
-fun BrandBar() {
+fun BlessTopBar(
+    selectedTab: AppTab,
+    captureEnabled: Boolean,
+    pendingCount: Int,
+    syncState: MessageRepository.SyncState,
+    onOpenProfile: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 8.dp),
+            .background(BlessBackground)
+            .statusBarsPadding()
+            .padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
             painter = painterResource(id = R.drawable.blessguardian_logo),
             contentDescription = null,
-            modifier = Modifier.height(32.dp)
+            modifier = Modifier.height(30.dp)
         )
         Spacer(modifier = Modifier.width(10.dp))
         Text(
-            text = "BlessGuardian",
-            style = MaterialTheme.typography.titleMedium,
+            text = selectedTab.title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp),
             fontWeight = FontWeight.Bold,
-            color = BlessText
+            color = BlessText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
+        Spacer(modifier = Modifier.width(8.dp))
+        ProtectionStatusChip(
+            captureEnabled = captureEnabled,
+            pendingCount = pendingCount,
+            syncState = syncState,
+            onClick = onOpenProfile
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        AccountAvatarPlaceholder(onClick = onOpenProfile)
     }
 }
 
+/** Responde "estou protegido agora?" em qualquer aba; toque leva ao Perfil (kill switch). */
 @Composable
-fun PageHeader(
-    title: String,
-    subtitle: String
-) {
-    Column {
-        BrandBar()
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(
-            text = title,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = subtitle,
-            color = BlessMuted,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-@Composable
-fun VulnerabilityCard(
-    score: Float,
+fun ProtectionStatusChip(
+    captureEnabled: Boolean,
     pendingCount: Int,
     syncState: MessageRepository.SyncState,
-    captureEnabled: Boolean
+    onClick: () -> Unit
 ) {
+    // Pendencias nao significam "offline": com internet, o servidor pode estar lento ou fora.
+    val (label, color) = when {
+        !captureEnabled -> "Pausado" to BlessWarning
+        syncState == MessageRepository.SyncState.OFFLINE -> "Sem internet" to BlessMuted
+        syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE -> "Indisponível" to BlessDanger
+        syncState == MessageRepository.SyncState.SYNCING -> "Enviando $pendingCount" to BlessPrimary
+        pendingCount > 0 -> "Na fila $pendingCount" to BlessWarning
+        else -> "Protegido" to BlessSafe
+    }
+    Surface(
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = color.copy(alpha = 0.14f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.55f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                color = color,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * ILUSTRATIVO: ainda nao existe login (o usuario e identificado pelo device_id).
+ * Substituir pela foto/iniciais do usuario quando a autenticacao do backend estiver pronta.
+ */
+@Composable
+fun AccountAvatarPlaceholder(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(BlessSurfaceElevated)
+            .border(1.dp, BlessBorder, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Person,
+            contentDescription = "Conta",
+            tint = BlessMuted,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/** Frase curta abaixo do topo explicando o que fazer na aba. */
+@Composable
+fun PageIntro(text: String) {
+    Text(
+        text = text,
+        color = BlessMuted,
+        style = MaterialTheme.typography.bodyMedium
+    )
+}
+
+@Composable
+fun VulnerabilityCard(score: Float) {
     GlassPanel {
         Text(
             text = "INDICE DE VULNERABILIDADE",
@@ -981,47 +1044,13 @@ fun VulnerabilityCard(
             }
         }
         Spacer(modifier = Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Pendencias nao significam "offline": com internet, o servidor pode estar lento
-            // ou fora. Cada situacao tem seu proprio texto.
-            val statusVisual = when {
-                !captureEnabled -> RiskVisual("Pausado", BlessWarning, BlessWarningSoft)
-                syncState == MessageRepository.SyncState.OFFLINE ->
-                    RiskVisual("Offline", BlessWarning, BlessWarningSoft)
-                syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE ->
-                    RiskVisual("Indisponivel", BlessDanger, BlessDangerSoft)
-                syncState == MessageRepository.SyncState.SYNCING ->
-                    RiskVisual("Enviando", BlessPrimary, BlessPrimarySoft)
-                pendingCount == 0 -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
-                else -> RiskVisual("Pendente", BlessWarning, BlessWarningSoft)
-            }
-            val statusValue = when {
-                !captureEnabled -> "pausado"
-                syncState == MessageRepository.SyncState.OFFLINE -> "sem internet"
-                syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE -> "servidor indisponivel"
-                syncState == MessageRepository.SyncState.SYNCING -> "enviando"
-                pendingCount == 0 -> "online"
-                else -> "na fila"
-            }
-            val statusLabel = when {
-                !captureEnabled -> "sem envio"
-                pendingCount == 0 -> "protegido"
-                pendingCount == 1 -> "1 pendencia"
-                else -> "$pendingCount pendencias"
-            }
-            StatusPill(
-                modifier = Modifier.weight(1f),
-                label = statusLabel,
-                value = statusValue,
-                visual = statusVisual
-            )
-            StatusPill(
-                modifier = Modifier.weight(1f),
-                label = riskName(score),
-                value = "risco atual",
-                visual = riskVisual(score)
-            )
-        }
+        // Status de conexao/fila fica no ProtectionStatusChip do topo; aqui so o risco.
+        StatusPill(
+            modifier = Modifier.fillMaxWidth(),
+            label = riskName(score),
+            value = "risco atual",
+            visual = riskVisual(score)
+        )
     }
 }
 
