@@ -31,6 +31,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -90,7 +93,6 @@ import com.example.antifraudagent.data.remote.RemoteFraudLog
 import com.example.antifraudagent.data.local.call.CallTranscript
 import com.example.antifraudagent.calls.CallProtectionSnapshot
 import com.example.antifraudagent.calls.CallProtectionState
-import com.example.antifraudagent.calls.CallRecordingService
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
@@ -122,6 +124,9 @@ class MainActivity : ComponentActivity() {
     private var isNotificationEnabled by mutableStateOf(false)
     private var isAccessibilityEnabled by mutableStateOf(false)
     private var isCallScreeningEnabled by mutableStateOf(false)
+    private var callPermissionsGranted by mutableStateOf(false)
+    private var overlayGranted by mutableStateOf(false)
+    private var requestedTab by mutableStateOf<AppTab?>(null)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -135,10 +140,10 @@ class MainActivity : ComponentActivity() {
 
     private val callPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        if (permissions.values.all { it }) {
-            CallRecordingService.start(this)
-        }
+    ) {
+        refreshCallRequirements()
+        // O monitor de chamadas precisa de READ_PHONE_STATE: rearma sem reiniciar a acessibilidade.
+        FraudAccessibilityService.instance?.rearmCallProtection()
     }
 
     private val callScreeningLauncher = registerForActivityResult(
@@ -170,13 +175,21 @@ class MainActivity : ComponentActivity() {
                 var manualResult by remember { mutableStateOf<FraudAnalysisResult?>(null) }
                 var manualError by remember { mutableStateOf<String?>(null) }
                 var isAnalyzing by remember { mutableStateOf(false) }
-                var callTranscripts by remember { mutableStateOf<List<CallTranscript>>(emptyList()) }
+                var manualAnalyzedText by remember { mutableStateOf("") }
+                var manualAnalyzedAt by remember { mutableStateOf(0L) }
+                val callRepository = remember { CallTranscriptRepository(applicationContext) }
+                val callTranscripts by remember { callRepository.observe() }
+                    .collectAsState(initial = emptyList())
 
                 fun refreshCallTranscripts() {
-                    scope.launch {
-                        val callRepository = CallTranscriptRepository(applicationContext)
-                        callRepository.retryPending()
-                        callTranscripts = callRepository.list()
+                    // So reenvia analises que nunca chegaram ao servidor (sem duplicar registros).
+                    scope.launch { callRepository.retryPending() }
+                }
+
+                LaunchedEffect(requestedTab) {
+                    requestedTab?.let {
+                        selectedTab = it
+                        requestedTab = null
                     }
                 }
 
@@ -198,7 +211,8 @@ class MainActivity : ComponentActivity() {
                     }
                     scope.launch {
                         val hadPending = repository.getPendingMessages().isNotEmpty()
-                        repository.processPendingMessages()
+                        // Roda fora da composicao: sair do app nao cancela o envio da fila.
+                        repository.drainQueueInBackground().join()
                         if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
                             runCatching { repository.getConfirmedFrauds() }
                                 .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
@@ -220,6 +234,8 @@ class MainActivity : ComponentActivity() {
                         manualResult = null
                         try {
                             manualResult = repository.analyzeManualMessage(content)
+                            manualAnalyzedText = content
+                            manualAnalyzedAt = System.currentTimeMillis()
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
                         } catch (e: Exception) {
@@ -235,9 +251,6 @@ class MainActivity : ComponentActivity() {
                     refreshCallTranscripts()
                 }
 
-                LaunchedEffect(liveCall.active, liveCall.status) {
-                    if (!liveCall.active && liveCall.transcript.isNotBlank()) refreshCallTranscripts()
-                }
 
                 BlessGuardianApp(
                     selectedTab = selectedTab,
@@ -252,6 +265,8 @@ class MainActivity : ComponentActivity() {
                     feedback = feedback,
                     manualText = manualText,
                     manualResult = manualResult,
+                    manualAnalyzedText = manualAnalyzedText,
+                    manualAnalyzedAt = manualAnalyzedAt,
                     manualError = manualError,
                     isAnalyzing = isAnalyzing,
                     onManualTextChange = { manualText = it },
@@ -260,20 +275,24 @@ class MainActivity : ComponentActivity() {
                     onRequestNotification = { openNotificationListenerSettings() },
                     onRequestAccessibility = { openAccessibilitySettings() },
                     onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
-                    callProtectionEnabled = callProtectionEnabled,
-                    callScreeningEnabled = isCallScreeningEnabled,
-                    callOverlayEnabled = Settings.canDrawOverlays(this@MainActivity),
+                    callRequirements = CallRequirements(
+                        protectionEnabled = callProtectionEnabled,
+                        permissionsGranted = callPermissionsGranted,
+                        accessibilityEnabled = isAccessibilityEnabled,
+                        overlayGranted = overlayGranted,
+                        screeningEnabled = isCallScreeningEnabled
+                    ),
                     liveCall = liveCall,
                     callTranscripts = callTranscripts,
                     onCallProtectionEnabledChange = { settings.setCallProtectionEnabled(it) },
-                    onStartCallProtection = { startCallProtection() },
+                    onRequestCallPermissions = { requestCallPermissions() },
                     onRequestCallScreening = { requestCallScreeningRole() },
                     onRequestCallOverlay = { requestCallOverlayPermission() },
                     onRefreshCallTranscripts = { refreshCallTranscripts() }
                 )
             }
         }
-        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
+        handleIntent(intent)
     }
 
     override fun onResume() {
@@ -281,6 +300,21 @@ class MainActivity : ComponentActivity() {
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
         refreshCallScreeningState()
+        refreshCallRequirements()
+    }
+
+    private fun refreshCallRequirements() {
+        callPermissionsGranted = CALL_PERMISSIONS.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+        overlayGranted = Settings.canDrawOverlays(this)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_OPEN_CALLS -> requestedTab = AppTab.Calls
+            ACTION_OPEN_HISTORY -> requestedTab = AppTab.History
+        }
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -318,17 +352,16 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
 
-    private fun startCallProtection() {
-        val permissions = listOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_PHONE_STATE
-        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
-        if (permissions.isEmpty()) {
-            CallRecordingService.start(this)
-        } else {
-            callPermissionLauncher.launch(permissions.toTypedArray())
+    private fun requestCallPermissions() {
+        val missing = (CALL_PERMISSIONS + notificationPermission()).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
+        if (missing.isNotEmpty()) callPermissionLauncher.launch(missing.toTypedArray())
     }
+
+    private fun notificationPermission(): List<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) listOf(Manifest.permission.POST_NOTIFICATIONS)
+        else emptyList()
 
     private fun requestCallScreeningRole() {
         val roleManager = getSystemService(RoleManager::class.java)
@@ -349,12 +382,16 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
+        handleIntent(intent)
     }
 
     companion object {
-        const val ACTION_START_CALL_PROTECTION = "com.example.antifraudagent.action.START_CALL_PROTECTION_FROM_UI"
         const val ACTION_OPEN_CALLS = "com.example.antifraudagent.action.OPEN_CALLS"
+        const val ACTION_OPEN_HISTORY = "com.example.antifraudagent.action.OPEN_HISTORY"
+        private val CALL_PERMISSIONS = listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
+        )
     }
 }
 
@@ -393,6 +430,8 @@ fun BlessGuardianApp(
     feedback: String?,
     manualText: String,
     manualResult: FraudAnalysisResult?,
+    manualAnalyzedText: String,
+    manualAnalyzedAt: Long,
     manualError: String?,
     isAnalyzing: Boolean,
     onManualTextChange: (String) -> Unit,
@@ -401,17 +440,20 @@ fun BlessGuardianApp(
     onRequestNotification: () -> Unit,
     onRequestAccessibility: () -> Unit,
     onCaptureEnabledChange: (Boolean) -> Unit,
-    callProtectionEnabled: Boolean,
-    callScreeningEnabled: Boolean,
-    callOverlayEnabled: Boolean,
+    callRequirements: CallRequirements,
     liveCall: CallProtectionSnapshot,
     callTranscripts: List<CallTranscript>,
     onCallProtectionEnabledChange: (Boolean) -> Unit,
-    onStartCallProtection: () -> Unit,
+    onRequestCallPermissions: () -> Unit,
     onRequestCallScreening: () -> Unit,
     onRequestCallOverlay: () -> Unit,
     onRefreshCallTranscripts: () -> Unit
 ) {
+    var openDetail by remember { mutableStateOf<AnalysisDetail?>(null) }
+    openDetail?.let { detail ->
+        AnalysisDetailSheet(detail = detail, onDismiss = { openDetail = null })
+    }
+    CompositionLocalProvider(LocalOpenDetail provides { openDetail = it }) {
     Scaffold(
         containerColor = BlessBackground,
         topBar = {
@@ -451,6 +493,8 @@ fun BlessGuardianApp(
                 padding = padding,
                 manualText = manualText,
                 manualResult = manualResult,
+                manualAnalyzedText = manualAnalyzedText,
+                manualAnalyzedAt = manualAnalyzedAt,
                 manualError = manualError,
                 isAnalyzing = isAnalyzing,
                 onManualTextChange = onManualTextChange,
@@ -459,13 +503,12 @@ fun BlessGuardianApp(
 
             AppTab.Calls -> CallProtectionScreen(
                 padding = padding,
-                enabled = callProtectionEnabled,
-                screeningEnabled = callScreeningEnabled,
-                overlayEnabled = callOverlayEnabled,
+                requirements = callRequirements,
                 liveCall = liveCall,
                 transcripts = callTranscripts,
                 onEnabledChange = onCallProtectionEnabledChange,
-                onStart = onStartCallProtection,
+                onRequestPermissions = onRequestCallPermissions,
+                onRequestAccessibility = onRequestAccessibility,
                 onRequestScreening = onRequestCallScreening,
                 onRequestOverlay = onRequestCallOverlay,
                 onRefresh = onRefreshCallTranscripts
@@ -484,7 +527,11 @@ fun BlessGuardianApp(
             )
         }
     }
+    }
 }
+
+/** Abre a folha de detalhes a partir de qualquer card. */
+val LocalOpenDetail = staticCompositionLocalOf<(AnalysisDetail) -> Unit> { {} }
 
 @Composable
 fun BlessBottomBar(
@@ -593,9 +640,9 @@ fun HistoryScreen(
     val filteredLogs = logs.filter { log ->
         when (selectedFilter) {
             RiskFilter.All -> true
-            RiskFilter.High -> log.riskScore >= 0.75f
-            RiskFilter.Medium -> log.riskScore in 0.4f..<0.75f
-            RiskFilter.Safe -> log.riskScore < 0.4f
+            RiskFilter.High -> log.isFraud || log.riskScore >= 0.75f
+            RiskFilter.Medium -> !log.isFraud && log.riskScore in 0.4f..<0.75f
+            RiskFilter.Safe -> !log.isFraud && log.riskScore < 0.4f
         }
     }
 
@@ -649,6 +696,8 @@ fun AnalyzeScreen(
     padding: PaddingValues,
     manualText: String,
     manualResult: FraudAnalysisResult?,
+    manualAnalyzedText: String,
+    manualAnalyzedAt: Long,
     manualError: String?,
     isAnalyzing: Boolean,
     onManualTextChange: (String) -> Unit,
@@ -736,7 +785,11 @@ fun AnalyzeScreen(
 
         if (manualResult != null) {
             item {
-                ManualResultCard(result = manualResult)
+                ManualResultCard(
+                    result = manualResult,
+                    analyzedText = manualAnalyzedText,
+                    analyzedAt = manualAnalyzedAt
+                )
             }
         }
     }
@@ -1137,15 +1190,16 @@ fun SectionTitle(
 
 @Composable
 fun RecentAlertRow(log: RemoteFraudLog) {
-    val visual = riskVisual(log.riskScore)
-    GlassPanel {
+    val visual = logVisual(log)
+    val openDetail = LocalOpenDetail.current
+    GlassPanel(onClick = { openDetail(log.toDetail()) }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RiskCircle(visual = visual)
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = log.source.ifBlank { "UNKNOWN" },
+                        text = sourceLabel(log.source),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold
                     )
@@ -1153,27 +1207,34 @@ fun RecentAlertRow(log: RemoteFraudLog) {
                     RiskBadge(visual = visual)
                 }
                 Text(
-                    text = log.content.ifBlank { "Mensagem sem conteudo." },
+                    text = log.content.ifBlank { "Mensagem sem conteúdo." },
                     color = BlessMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text(
-                text = compactDate(log.detectedAt),
-                color = BlessMuted,
-                style = MaterialTheme.typography.bodySmall
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = compactDate(log.detectedAt),
+                    color = BlessMuted,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Icon(Icons.Filled.ChevronRight, contentDescription = "Ver detalhes", tint = BlessMuted)
+            }
         }
     }
 }
 
 @Composable
 fun HistoryLogCard(log: RemoteFraudLog) {
-    val visual = riskVisual(log.riskScore)
+    val visual = logVisual(log)
+    val openDetail = LocalOpenDetail.current
+    val justification = log.hybrid?.justification ?: log.explanation
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { openDetail(log.toDetail()) }
             .border(1.dp, visual.color.copy(alpha = 0.85f), RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         color = BlessSurface
@@ -1185,7 +1246,7 @@ fun HistoryLogCard(log: RemoteFraudLog) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${log.source.ifBlank { "UNKNOWN" }} - ${if (log.isFraud) "confirmado" else "analisado"}",
+                    text = "${sourceLabel(log.source)} · ${if (log.isFraud) "golpe detectado" else "analisado"}",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -1197,34 +1258,42 @@ fun HistoryLogCard(log: RemoteFraudLog) {
             }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = log.content.ifBlank { "Mensagem sem conteudo retornado." },
+                text = log.content.ifBlank { "Mensagem sem conteúdo retornado." },
                 color = BlessText,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
-            if (log.explanation.isNotBlank()) {
+            if (justification.isNotBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = log.explanation,
+                    text = justification,
                     color = BlessMuted,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
             Spacer(modifier = Modifier.height(10.dp))
-            Text(
-                text = compactDate(log.detectedAt),
-                color = BlessMuted,
-                style = MaterialTheme.typography.bodySmall
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = compactDate(log.detectedAt),
+                    color = BlessMuted,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                DetailsHint()
+            }
         }
     }
 }
 
 @Composable
-fun ManualResultCard(result: FraudAnalysisResult) {
-    val visual = riskVisual(result.score)
-    GlassPanel {
+fun ManualResultCard(result: FraudAnalysisResult, analyzedText: String, analyzedAt: Long) {
+    val visual = if (result.isFraud) RiskVisual("Alto risco", BlessDanger, BlessDangerSoft) else riskVisual(result.score)
+    val openDetail = LocalOpenDetail.current
+    GlassPanel(onClick = { openDetail(result.toDetail(analyzedText, analyzedAt)) }) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1232,12 +1301,12 @@ fun ManualResultCard(result: FraudAnalysisResult) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (result.isFraud) "Possivel golpe detectado" else "Mensagem com baixo risco",
+                    text = if (result.isFraud) "Possível golpe detectado" else "Mensagem com baixo risco",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = result.category.ifBlank { "categoria nao informada" },
+                    text = result.category.ifBlank { "categoria não informada" },
                     color = BlessMuted
                 )
             }
@@ -1245,15 +1314,24 @@ fun ManualResultCard(result: FraudAnalysisResult) {
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = result.explanation,
-            color = BlessText
+            text = result.hybrid?.justification ?: result.verdict.ifBlank { result.explanation },
+            color = BlessText,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "Gravado no historico oficial.",
-            color = BlessSafe,
-            style = MaterialTheme.typography.bodySmall
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Gravado no histórico oficial.",
+                color = BlessSafe,
+                style = MaterialTheme.typography.bodySmall
+            )
+            DetailsHint()
+        }
     }
 }
 
@@ -1314,11 +1392,14 @@ fun PanelLabel(text: String) {
 @Composable
 fun GlassPanel(
     modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .border(1.dp, BlessBorder, RoundedCornerShape(18.dp)),
         shape = RoundedCornerShape(18.dp),
         color = BlessSurface
@@ -1501,14 +1582,28 @@ fun riskVisual(score: Float): RiskVisual = when {
 
 fun riskName(score: Float): String = riskVisual(score).label.lowercase()
 
+/** Fraude confirmada pelo servidor e sempre vermelho, mesmo com score baixo (hibrido AVISO). */
+fun logVisual(log: RemoteFraudLog): RiskVisual =
+    if (log.isFraud) RiskVisual("Alto risco", BlessDanger, BlessDangerSoft) else riskVisual(log.riskScore)
+
+@Composable
+fun DetailsHint() {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Ver detalhes", color = BlessPrimary, style = MaterialTheme.typography.labelMedium)
+        Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = BlessPrimary, modifier = Modifier.size(18.dp))
+    }
+}
+
 fun formatScore(score: Float): String = String.format(Locale.US, "%.2f", score.coerceIn(0f, 1f))
 
 fun compactDate(value: String): String {
     if (value.isBlank()) return "agora"
-    return value
-        .replace("T", " ")
-        .replace("Z", "")
-        .take(16)
+    return try {
+        java.time.OffsetDateTime.parse(value)
+            .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM HH:mm", Locale("pt", "BR")))
+    } catch (_: Exception) {
+        value.replace("T", " ").replace("Z", "").take(16)
+    }
 }
 
 fun todayLabel(): String {

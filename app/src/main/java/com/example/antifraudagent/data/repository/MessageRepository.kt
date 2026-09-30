@@ -16,7 +16,13 @@ import com.example.antifraudagent.data.remote.FraudApiHttpException
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.calls.SuspiciousMessageAlert
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +49,9 @@ class MessageRepository(context: Context) {
         // Compartilhados entre as instancias (Activity, servicos de captura, SmsReceiver) do
         // mesmo processo: garante um unico envio da fila por vez, evitando registros duplicados.
         private val pendingQueueMutex = Mutex()
+
+        /** A fila roda no escopo do processo: sair da tela nao pode cancelar o envio. */
+        private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private val _syncState = MutableStateFlow(SyncState.IDLE)
         val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
     }
@@ -118,6 +127,10 @@ class MessageRepository(context: Context) {
                 enqueuePending(message)
             }
             return@withContext
+        } catch (e: CancellationException) {
+            // Cancelado (nao e falha do servidor): guarda a mensagem para nao perde-la.
+            withContext(NonCancellable) { enqueuePending(message) }
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Falha ao enviar mensagem atual; salvando como PENDING", e)
             _syncState.value = SyncState.SERVER_UNAVAILABLE
@@ -128,8 +141,15 @@ class MessageRepository(context: Context) {
         processPendingMessagesInternal()
     }
 
+    /**
+     * Historico de MENSAGENS. As analises de ligacao (source=call, varias por ligacao durante a
+     * conversa) ficam na aba Ligacoes, com historico proprio.
+     */
     suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
-        withContext(Dispatchers.IO) { apiClient.getLogs(deviceId = deviceId) }
+        withContext(Dispatchers.IO) {
+            apiClient.getLogs(deviceId = deviceId, limit = 200)
+                .filterNot { it.source.equals("call", ignoreCase = true) }
+        }
 
     suspend fun analyzeManualMessage(content: String): FraudAnalysisResult =
         withContext(Dispatchers.IO) {
@@ -159,6 +179,9 @@ class MessageRepository(context: Context) {
         withContext(Dispatchers.IO) { dao.getAllPending() }
 
     fun observePendingCount(): Flow<Int> = dao.observePendingCount()
+
+    /** Envia a fila em segundo plano, independente da tela que pediu. */
+    fun drainQueueInBackground(): Job = queueScope.launch { processPendingMessages() }
 
     suspend fun processPendingMessages() = withContext(Dispatchers.IO) {
         if (!settings.isCaptureEnabled()) {
@@ -196,6 +219,10 @@ class MessageRepository(context: Context) {
                     Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
                     _syncState.value = SyncState.SERVER_UNAVAILABLE
                     return
+                } catch (e: CancellationException) {
+                    // Envio cancelado (ex.: tela fechada) nao significa servidor indisponivel.
+                    _syncState.value = SyncState.IDLE
+                    throw e
                 } catch (e: Exception) {
                     // Falha transitoria (timeout, rede, 5xx): o servidor provavelmente esta fora;
                     // para aqui e tenta de novo no proximo gatilho, sem martelar a API.
@@ -223,7 +250,13 @@ class MessageRepository(context: Context) {
 
         if (result.isFraud) {
             Log.d(TAG, "Fraude detectada pelo servidor | score=${result.score} | dbSynced=${result.dbSynced}")
-            SuspiciousMessageAlert.show(appContext, result)
+            SuspiciousMessageAlert.show(
+                context = appContext,
+                result = result,
+                content = message.content,
+                sourceName = message.source.name,
+                capturedAt = message.capturedAt
+            )
         } else {
             Log.d(TAG, "Servidor descartou mensagem online")
         }
