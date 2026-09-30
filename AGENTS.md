@@ -36,6 +36,15 @@ Mensagem capturada
 -> historico vem de GET /logs?device_id=...
 ```
 
+Regras da fila `PENDING` (`MessageRepository`):
+
+- A mensagem atual e enviada antes da fila; so depois de um envio bem-sucedido a fila e processada.
+- Um unico envio da fila por vez no processo (`Mutex` no companion, `tryLock`): Activity, servicos de captura e `SmsReceiver` compartilham a trava, evitando registros duplicados no DynamoDB.
+- Falha transitoria (timeout, rede, HTTP 5xx/408/429) interrompe a fila; ela volta no proximo gatilho (abrir/atualizar o app, rede disponivel, nova captura).
+- HTTP 4xx definitivo (`FraudApiHttpException.isPermanent`) remove o item da fila, para ele nao travar as demais pendencias.
+- `MessageRepository.syncState` (`IDLE`, `SYNCING`, `SERVER_UNAVAILABLE`, `OFFLINE`) alimenta o card da Inicio; pendencias com internet NAO devem aparecer como "offline".
+- A tela carrega `GET /logs` primeiro e processa a fila em paralelo; o contador vem de `observePendingCount()` (Flow do Room).
+
 `SettingsRepository` (em `data/settings/SettingsRepository.kt`) e um singleton com SharedPreferences que expoe a flag `capture_enabled` (default `true`) via `StateFlow`. Compose (aba Perfil) e `MessageRepository` observam a mesma instancia. Quando desligado, `saveIfSuspicious`, `analyzeManualMessage` e `processPendingMessages` retornam cedo sem tocar Room nem HTTP.
 
 ## Camada de pre-processamento local
@@ -120,6 +129,21 @@ Payload enviado pelo Android:
   "source": "sms"
 }
 ```
+
+### Chamadas transcritas
+
+A aba `Ligacoes` usa `CallScreeningService` somente para oferecer ao usuário a
+abertura da proteção. Ela não bloqueia ou encerra chamadas. Ao iniciar uma sessão
+visível, `CallRecordingService` roda como foreground service de microfone,
+transcreve o áudio acústico capturado no viva-voz e envia apenas a transcrição
+consolidada ao término com `source=call`.
+
+- O áudio bruto é temporário, interno ao app e removido quando a sessão termina.
+- A transcrição final fica em `call_transcripts` no Room e pode ser reenviada.
+- O overlay de alerta requer a concessão explícita de “exibir sobre outros apps”.
+- `VOICE_CALL` e `CAPTURE_AUDIO_OUTPUT` não são caminhos válidos para app comum;
+  não prometer captura direta dos dois lados em todos os modelos Android.
+- O alerta de risco alto pode ser fechado para que o usuário continue a chamada.
 
 Resposta esperada (status 201):
 
@@ -264,6 +288,7 @@ Quebras de build conhecidas e como evitar:
 - Captura por notificacao, SMS e acessibilidade ainda funciona.
 - Offline cria registros `PENDING`.
 - Reonline processa fila pendente.
+- Historico carrega na hora mesmo com fila grande; card mostra "enviando" durante o envio.
 - Pendencia so sai do Room com `status_db=true`.
 - `Atualizar` consulta `/logs?device_id=...`.
 - `Historico` mostra dados vindos do backend AWS (DynamoDB).

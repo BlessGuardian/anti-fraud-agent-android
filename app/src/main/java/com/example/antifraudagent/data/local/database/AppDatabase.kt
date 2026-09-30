@@ -7,6 +7,9 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import com.example.antifraudagent.data.local.dao.AnalyzedMessageDao
+import com.example.antifraudagent.data.local.call.CallTranscript
+import com.example.antifraudagent.data.local.call.CallTranscriptDao
+import com.example.antifraudagent.data.local.call.CallTranscriptSyncStatus
 import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
@@ -22,6 +25,9 @@ class Converters {
 
     @TypeConverter fun statusToString(value: MessageStatus): String = value.name
     @TypeConverter fun stringToStatus(value: String): MessageStatus = MessageStatus.valueOf(value)
+
+    @TypeConverter fun callSyncStatusToString(value: CallTranscriptSyncStatus): String = value.name
+    @TypeConverter fun stringToCallSyncStatus(value: String): CallTranscriptSyncStatus = CallTranscriptSyncStatus.valueOf(value)
 }
 
 // -----------------------------------------------------------------------------
@@ -29,14 +35,15 @@ class Converters {
 // -----------------------------------------------------------------------------
 
 @Database(
-    entities = [AnalyzedMessage::class],
-    version  = 1,
+    entities = [AnalyzedMessage::class, CallTranscript::class],
+    version  = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun analyzedMessageDao(): AnalyzedMessageDao
+    abstract fun callTranscriptDao(): CallTranscriptDao
 
     companion object {
         @Volatile
@@ -53,7 +60,20 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "antifraud_database"
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
+            }
+        }
+
+        private val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `call_transcripts` (" +
+                        "`sessionId` TEXT NOT NULL, `content` TEXT NOT NULL, " +
+                        "`startedAt` INTEGER NOT NULL, `endedAt` INTEGER NOT NULL, " +
+                        "`riskScore` REAL, `isFraud` INTEGER, `explanation` TEXT, " +
+                        "`syncStatus` TEXT NOT NULL, `syncError` TEXT, " +
+                        "PRIMARY KEY(`sessionId`))"
+                )
             }
         }
     }

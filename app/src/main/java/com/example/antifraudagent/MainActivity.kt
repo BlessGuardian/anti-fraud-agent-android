@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.app.role.RoleManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -27,6 +29,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -82,6 +87,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.RemoteFraudLog
+import com.example.antifraudagent.data.local.call.CallTranscript
+import com.example.antifraudagent.calls.CallProtectionSnapshot
+import com.example.antifraudagent.calls.CallProtectionState
+import com.example.antifraudagent.calls.CallRecordingService
+import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.services.FraudAccessibilityService
@@ -111,6 +121,7 @@ class MainActivity : ComponentActivity() {
 
     private var isNotificationEnabled by mutableStateOf(false)
     private var isAccessibilityEnabled by mutableStateOf(false)
+    private var isCallScreeningEnabled by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -121,6 +132,18 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private val callPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.all { it }) {
+            CallRecordingService.start(this)
+        }
+    }
+
+    private val callScreeningLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { refreshCallScreeningState() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,32 +156,52 @@ class MainActivity : ComponentActivity() {
                 val repository = remember { MessageRepository(applicationContext) }
                 val settings = remember { SettingsRepository.getInstance(applicationContext) }
                 val captureEnabled by settings.captureEnabled.collectAsState()
+                val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
+                val liveCall by CallProtectionState.state.collectAsState()
                 val scope = rememberCoroutineScope()
                 var selectedTab by remember { mutableStateOf(AppTab.Home) }
                 var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
-                var pendingCount by remember { mutableStateOf(0) }
+                val pendingCount by remember { repository.observePendingCount() }
+                    .collectAsState(initial = 0)
+                val syncState by MessageRepository.syncState.collectAsState()
                 var isLoading by remember { mutableStateOf(false) }
                 var feedback by remember { mutableStateOf<String?>(null) }
                 var manualText by remember { mutableStateOf("") }
                 var manualResult by remember { mutableStateOf<FraudAnalysisResult?>(null) }
                 var manualError by remember { mutableStateOf<String?>(null) }
                 var isAnalyzing by remember { mutableStateOf(false) }
+                var callTranscripts by remember { mutableStateOf<List<CallTranscript>>(emptyList()) }
+
+                fun refreshCallTranscripts() {
+                    scope.launch {
+                        val callRepository = CallTranscriptRepository(applicationContext)
+                        callRepository.retryPending()
+                        callTranscripts = callRepository.list()
+                    }
+                }
 
                 fun refreshData() {
                     scope.launch {
                         isLoading = true
                         feedback = null
                         try {
-                            repository.processPendingMessages()
-                            pendingCount = repository.getPendingMessages().size
+                            // Historico primeiro: esvaziar a fila antes deixava a tela presa em
+                            // "Consultando..." por minutos quando havia muitas pendencias.
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
                             feedback = "Historico atualizado pelo servidor."
                         } catch (e: Exception) {
-                            pendingCount = repository.getPendingMessages().size
                             feedback = "Nao foi possivel consultar o servidor: ${e.message ?: "erro desconhecido"}"
                         } finally {
                             isLoading = false
+                        }
+                    }
+                    scope.launch {
+                        val hadPending = repository.getPendingMessages().isNotEmpty()
+                        repository.processPendingMessages()
+                        if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
+                            runCatching { repository.getConfirmedFrauds() }
+                                .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
                         }
                     }
                 }
@@ -179,7 +222,6 @@ class MainActivity : ComponentActivity() {
                             manualResult = repository.analyzeManualMessage(content)
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
-                            pendingCount = repository.getPendingMessages().size
                         } catch (e: Exception) {
                             manualError = e.message ?: "Nao foi possivel analisar a mensagem."
                         } finally {
@@ -190,6 +232,11 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(Unit) {
                     refreshData()
+                    refreshCallTranscripts()
+                }
+
+                LaunchedEffect(liveCall.active, liveCall.status) {
+                    if (!liveCall.active && liveCall.transcript.isNotBlank()) refreshCallTranscripts()
                 }
 
                 BlessGuardianApp(
@@ -199,6 +246,7 @@ class MainActivity : ComponentActivity() {
                     accessibilityEnabled = isAccessibilityEnabled,
                     captureEnabled = captureEnabled,
                     pendingCount = pendingCount,
+                    syncState = syncState,
                     logs = fraudLogs,
                     isLoading = isLoading,
                     feedback = feedback,
@@ -211,16 +259,28 @@ class MainActivity : ComponentActivity() {
                     onRefresh = { refreshData() },
                     onRequestNotification = { openNotificationListenerSettings() },
                     onRequestAccessibility = { openAccessibilitySettings() },
-                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) }
+                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
+                    callProtectionEnabled = callProtectionEnabled,
+                    callScreeningEnabled = isCallScreeningEnabled,
+                    callOverlayEnabled = Settings.canDrawOverlays(this@MainActivity),
+                    liveCall = liveCall,
+                    callTranscripts = callTranscripts,
+                    onCallProtectionEnabledChange = { settings.setCallProtectionEnabled(it) },
+                    onStartCallProtection = { startCallProtection() },
+                    onRequestCallScreening = { requestCallScreeningRole() },
+                    onRequestCallOverlay = { requestCallOverlayPermission() },
+                    onRefreshCallTranscripts = { refreshCallTranscripts() }
                 )
             }
         }
+        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
     }
 
     override fun onResume() {
         super.onResume()
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
+        refreshCallScreeningState()
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -257,13 +317,53 @@ class MainActivity : ComponentActivity() {
     private fun openAccessibilitySettings() {
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     }
+
+    private fun startCallProtection() {
+        val permissions = listOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE
+        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (permissions.isEmpty()) {
+            CallRecordingService.start(this)
+        } else {
+            callPermissionLauncher.launch(permissions.toTypedArray())
+        }
+    }
+
+    private fun requestCallScreeningRole() {
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (!roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
+            callScreeningLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
+        }
+    }
+
+    private fun refreshCallScreeningState() {
+        val roleManager = getSystemService(RoleManager::class.java)
+        isCallScreeningEnabled = roleManager.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)
+    }
+
+    private fun requestCallOverlayPermission() {
+        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == ACTION_START_CALL_PROTECTION) startCallProtection()
+    }
+
+    companion object {
+        const val ACTION_START_CALL_PROTECTION = "com.example.antifraudagent.action.START_CALL_PROTECTION_FROM_UI"
+        const val ACTION_OPEN_CALLS = "com.example.antifraudagent.action.OPEN_CALLS"
+    }
 }
 
-enum class AppTab(val label: String, val icon: ImageVector) {
-    Home("Inicio", Icons.Filled.Security),
-    History("Historico", Icons.Filled.History),
-    Analyze("Analisar", Icons.Filled.Search),
-    Profile("Perfil", Icons.Filled.Person)
+enum class AppTab(val label: String, val title: String, val icon: ImageVector) {
+    Home("Início", "BlessGuardian", Icons.Filled.Security),
+    History("Histórico", "Histórico", Icons.Filled.History),
+    Analyze("Analisar", "Análise", Icons.Filled.Search),
+    Calls("Ligações", "Ligações", Icons.Filled.Phone),
+    Profile("Perfil", "Perfil", Icons.Filled.Person)
 }
 
 enum class RiskFilter(val label: String) {
@@ -287,6 +387,7 @@ fun BlessGuardianApp(
     accessibilityEnabled: Boolean,
     captureEnabled: Boolean,
     pendingCount: Int,
+    syncState: MessageRepository.SyncState,
     logs: List<RemoteFraudLog>,
     isLoading: Boolean,
     feedback: String?,
@@ -299,10 +400,29 @@ fun BlessGuardianApp(
     onRefresh: () -> Unit,
     onRequestNotification: () -> Unit,
     onRequestAccessibility: () -> Unit,
-    onCaptureEnabledChange: (Boolean) -> Unit
+    onCaptureEnabledChange: (Boolean) -> Unit,
+    callProtectionEnabled: Boolean,
+    callScreeningEnabled: Boolean,
+    callOverlayEnabled: Boolean,
+    liveCall: CallProtectionSnapshot,
+    callTranscripts: List<CallTranscript>,
+    onCallProtectionEnabledChange: (Boolean) -> Unit,
+    onStartCallProtection: () -> Unit,
+    onRequestCallScreening: () -> Unit,
+    onRequestCallOverlay: () -> Unit,
+    onRefreshCallTranscripts: () -> Unit
 ) {
     Scaffold(
         containerColor = BlessBackground,
+        topBar = {
+            BlessTopBar(
+                selectedTab = selectedTab,
+                captureEnabled = captureEnabled,
+                pendingCount = pendingCount,
+                syncState = syncState,
+                onOpenProfile = { onTabSelected(AppTab.Profile) }
+            )
+        },
         bottomBar = {
             BlessBottomBar(
                 selectedTab = selectedTab,
@@ -314,8 +434,6 @@ fun BlessGuardianApp(
             AppTab.Home -> HomeScreen(
                 padding = padding,
                 logs = logs,
-                pendingCount = pendingCount,
-                captureEnabled = captureEnabled,
                 isLoading = isLoading,
                 feedback = feedback,
                 onRefresh = onRefresh
@@ -337,6 +455,20 @@ fun BlessGuardianApp(
                 isAnalyzing = isAnalyzing,
                 onManualTextChange = onManualTextChange,
                 onAnalyzeManual = onAnalyzeManual
+            )
+
+            AppTab.Calls -> CallProtectionScreen(
+                padding = padding,
+                enabled = callProtectionEnabled,
+                screeningEnabled = callScreeningEnabled,
+                overlayEnabled = callOverlayEnabled,
+                liveCall = liveCall,
+                transcripts = callTranscripts,
+                onEnabledChange = onCallProtectionEnabledChange,
+                onStart = onStartCallProtection,
+                onRequestScreening = onRequestCallScreening,
+                onRequestOverlay = onRequestCallOverlay,
+                onRefresh = onRefreshCallTranscripts
             )
 
             AppTab.Profile -> ProfileScreen(
@@ -386,8 +518,6 @@ fun BlessBottomBar(
 fun HomeScreen(
     padding: PaddingValues,
     logs: List<RemoteFraudLog>,
-    pendingCount: Int,
-    captureEnabled: Boolean,
     isLoading: Boolean,
     feedback: String?,
     onRefresh: () -> Unit
@@ -403,12 +533,7 @@ fun HomeScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            TopHandle()
-            VulnerabilityCard(
-                score = vulnerability,
-                pendingCount = pendingCount,
-                captureEnabled = captureEnabled
-            )
+            VulnerabilityCard(score = vulnerability)
         }
 
         item {
@@ -476,14 +601,6 @@ fun HistoryScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                icon = Icons.Filled.Shield,
-                title = "Historico",
-                subtitle = "Todas as mensagens analisadas"
-            )
-        }
-
-        item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(RiskFilter.High, RiskFilter.Medium, RiskFilter.Safe).forEach { filter ->
                     RiskFilterChip(
@@ -539,11 +656,7 @@ fun AnalyzeScreen(
 ) {
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                icon = Icons.Filled.Shield,
-                title = "Analise Retroativa",
-                subtitle = "Cole uma mensagem suspeita para verificar"
-            )
+            PageIntro("Cole uma mensagem suspeita para verificar se é golpe.")
         }
 
         item {
@@ -651,11 +764,7 @@ fun ProfileScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            PageHeader(
-                icon = Icons.Filled.Shield,
-                title = "Perfil",
-                subtitle = "Configure seu nivel de vigilancia"
-            )
+            PageIntro("Configure seu nível de vigilância.")
         }
 
         item {
@@ -769,7 +878,7 @@ fun ScreenColumn(
             .background(BlessBackground),
         contentPadding = PaddingValues(
             start = 24.dp,
-            top = padding.calculateTopPadding() + 28.dp,
+            top = padding.calculateTopPadding() + 8.dp,
             end = 24.dp,
             bottom = padding.calculateBottomPadding() + 24.dp
         ),
@@ -778,63 +887,135 @@ fun ScreenColumn(
     )
 }
 
+/**
+ * Topo fixo de todas as abas: logo + titulo da aba (na Inicio, o nome do app), status da
+ * protecao e acesso a conta. Fica no topBar do Scaffold, entao nao some ao rolar.
+ */
 @Composable
-fun TopHandle() {
-    Box(
+fun BlessTopBar(
+    selectedTab: AppTab,
+    captureEnabled: Boolean,
+    pendingCount: Int,
+    syncState: MessageRepository.SyncState,
+    onOpenProfile: () -> Unit
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 4.dp),
-        contentAlignment = Alignment.Center
+            .background(BlessBackground)
+            .statusBarsPadding()
+            .padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .width(80.dp)
-                .height(5.dp)
-                .clip(CircleShape)
-                .background(BlessPrimarySoft.copy(alpha = 0.55f))
+        Image(
+            painter = painterResource(id = R.drawable.blessguardian_logo),
+            contentDescription = null,
+            modifier = Modifier.height(30.dp)
         )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = selectedTab.title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp),
+            fontWeight = FontWeight.Bold,
+            color = BlessText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        ProtectionStatusChip(
+            captureEnabled = captureEnabled,
+            pendingCount = pendingCount,
+            syncState = syncState,
+            onClick = onOpenProfile
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        AccountAvatarPlaceholder(onClick = onOpenProfile)
     }
 }
 
+/** Responde "estou protegido agora?" em qualquer aba; toque leva ao Perfil (kill switch). */
 @Composable
-fun PageHeader(
-    icon: ImageVector,
-    title: String,
-    subtitle: String
+fun ProtectionStatusChip(
+    captureEnabled: Boolean,
+    pendingCount: Int,
+    syncState: MessageRepository.SyncState,
+    onClick: () -> Unit
 ) {
-    Column {
-        TopHandle()
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(
-                painter = painterResource(id = R.drawable.blessguardian_logo),
-                contentDescription = "BlessGuardian",
-                modifier = Modifier.size(34.dp)
+    // Pendencias nao significam "offline": com internet, o servidor pode estar lento ou fora.
+    val (label, color) = when {
+        !captureEnabled -> "Pausado" to BlessWarning
+        syncState == MessageRepository.SyncState.OFFLINE -> "Sem internet" to BlessMuted
+        syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE -> "Indisponível" to BlessDanger
+        syncState == MessageRepository.SyncState.SYNCING -> "Enviando $pendingCount" to BlessPrimary
+        pendingCount > 0 -> "Na fila $pendingCount" to BlessWarning
+        else -> "Protegido" to BlessSafe
+    }
+    Surface(
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = color.copy(alpha = 0.14f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.55f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(color)
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = BlessPrimary,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                text = label,
+                color = color,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = subtitle,
-            color = BlessMuted,
-            style = MaterialTheme.typography.bodyMedium
+    }
+}
+
+/**
+ * ILUSTRATIVO: ainda nao existe login (o usuario e identificado pelo device_id).
+ * Substituir pela foto/iniciais do usuario quando a autenticacao do backend estiver pronta.
+ */
+@Composable
+fun AccountAvatarPlaceholder(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(BlessSurfaceElevated)
+            .border(1.dp, BlessBorder, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Person,
+            contentDescription = "Conta",
+            tint = BlessMuted,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
 
+/** Frase curta abaixo do topo explicando o que fazer na aba. */
 @Composable
-fun VulnerabilityCard(score: Float, pendingCount: Int, captureEnabled: Boolean) {
+fun PageIntro(text: String) {
+    Text(
+        text = text,
+        color = BlessMuted,
+        style = MaterialTheme.typography.bodyMedium
+    )
+}
+
+@Composable
+fun VulnerabilityCard(score: Float) {
     GlassPanel {
         Text(
             text = "INDICE DE VULNERABILIDADE",
@@ -863,35 +1044,13 @@ fun VulnerabilityCard(score: Float, pendingCount: Int, captureEnabled: Boolean) 
             }
         }
         Spacer(modifier = Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val statusVisual = when {
-                !captureEnabled -> RiskVisual("Pausado", BlessWarning, BlessWarningSoft)
-                pendingCount == 0 -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
-                else -> RiskVisual("Pendente", BlessWarning, BlessWarningSoft)
-            }
-            val statusValue = when {
-                !captureEnabled -> "pausado"
-                pendingCount == 0 -> "online"
-                else -> "offline"
-            }
-            val statusLabel = when {
-                !captureEnabled -> "sem envio"
-                pendingCount == 0 -> "protegido"
-                else -> "$pendingCount pendencias"
-            }
-            StatusPill(
-                modifier = Modifier.weight(1f),
-                label = statusLabel,
-                value = statusValue,
-                visual = statusVisual
-            )
-            StatusPill(
-                modifier = Modifier.weight(1f),
-                label = riskName(score),
-                value = "risco atual",
-                visual = riskVisual(score)
-            )
-        }
+        // Status de conexao/fila fica no ProtectionStatusChip do topo; aqui so o risco.
+        StatusPill(
+            modifier = Modifier.fillMaxWidth(),
+            label = riskName(score),
+            value = "risco atual",
+            visual = riskVisual(score)
+        )
     }
 }
 

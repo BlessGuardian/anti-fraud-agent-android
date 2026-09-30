@@ -58,11 +58,27 @@ Este app nasce para preencher essa lacuna: **proteger o usuário em tempo real, 
 | 2 | Captura via SmsReceiver (SMS) | ✅ |
 | 3 | Captura via AccessibilityService (tela aberta) | ✅ |
 | 4 | Room Database local com fila de pendentes e evicção por score | ✅ |
-| 5 | Popup de ligação com overlay e ativação automática do viva-voz | 🔄 |
-| 6 | Heurística local — padrões de golpe brasileiros (Camada 1) | 🔄 |
+| 5 | Proteção experimental de ligação: transcrição pelo microfone no viva-voz, alerta e envio da transcrição | 🧪 |
+| 6 | Sinais locais de golpes brasileiros para alertas durante chamadas | ✅ |
 | 7 | Integração com servidor FastAPI na AWS (Camada 2) | 🔄 |
 | 8 | Modo de análise retroativa (colar texto / compartilhar / OCR) | 🔄 |
 | 9 | Interface completa — dashboard, alertas, histórico, perfil de risco | 🔄 |
+
+### Proteção de chamadas experimental
+
+Na aba **Ligações**, o usuário pode habilitar a detecção de chamadas, iniciar uma
+sessão de proteção, acompanhar a transcrição ao vivo e revisar as transcrições
+concluídas. A sessão solicita o microfone, usa o viva-voz como fonte acústica e
+mostra um alerta que pode ser fechado quando detectar combinação de sinais como
+Pix, senha, token, urgência ou acesso remoto.
+
+O áudio é gravado apenas temporariamente no armazenamento privado do aplicativo
+e é apagado ao encerrar a sessão. Somente a transcrição final é salva localmente
+e enviada ao backend com `source=call` para análise e histórico oficial.
+
+> A captura de ambos os lados de uma ligação não é garantida por Android em apps
+> comuns. Teste em aparelho físico com viva-voz antes de usar o recurso fora do
+> ambiente de desenvolvimento.
 
 ---
 

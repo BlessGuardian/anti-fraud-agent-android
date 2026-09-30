@@ -26,8 +26,13 @@ class SettingsRepository private constructor(context: Context) {
         prefs.getBoolean(KEY_CAPTURE_ENABLED, DEFAULT_CAPTURE_ENABLED)
     )
 
+    private val _callProtectionEnabled = MutableStateFlow(
+        prefs.getBoolean(KEY_CALL_PROTECTION_ENABLED, DEFAULT_CALL_PROTECTION_ENABLED)
+    )
+
     /** Flag observavel pelo Compose. */
     val captureEnabled: StateFlow<Boolean> = _captureEnabled.asStateFlow()
+    val callProtectionEnabled: StateFlow<Boolean> = _callProtectionEnabled.asStateFlow()
 
     /** Leitura sincrona chamada pelos servicos antes de salvar/enviar. */
     fun isCaptureEnabled(): Boolean = _captureEnabled.value
@@ -37,10 +42,19 @@ class SettingsRepository private constructor(context: Context) {
         _captureEnabled.value = enabled
     }
 
+    fun isCallProtectionEnabled(): Boolean = _callProtectionEnabled.value
+
+    fun setCallProtectionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CALL_PROTECTION_ENABLED, enabled).apply()
+        _callProtectionEnabled.value = enabled
+    }
+
     companion object {
         private const val PREFS_NAME = "antifraud_settings"
         private const val KEY_CAPTURE_ENABLED = "capture_enabled"
+        private const val KEY_CALL_PROTECTION_ENABLED = "call_protection_enabled"
         private const val DEFAULT_CAPTURE_ENABLED = true
+        private const val DEFAULT_CALL_PROTECTION_ENABLED = false
 
         @Volatile
         private var instance: SettingsRepository? = null
