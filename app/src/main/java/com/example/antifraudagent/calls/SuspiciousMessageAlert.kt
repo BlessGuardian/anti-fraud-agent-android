@@ -2,73 +2,100 @@ package com.example.antifraudagent.calls
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.provider.Settings
-import android.view.Gravity
-import android.view.WindowManager
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.VibratorManager
+import com.example.antifraudagent.MainActivity
+import com.example.antifraudagent.R
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
+import com.example.antifraudagent.data.remote.HybridVerdict
+import com.example.antifraudagent.sourceLabel
 
-/** Aviso dispensavel para uma mensagem que o backend classificou como fraude. */
+/**
+ * Alerta de golpe em MENSAGEM, no mesmo padrao da ligacao: pop-up por cima de qualquer app
+ * (overlay de acessibilidade), notificacao de alta prioridade e vibracao.
+ *
+ * Mensagens antigas (fila offline enviada depois) so geram notificacao: um pop-up minutos depois
+ * da mensagem chegar confundiria mais do que ajudaria.
+ */
 object SuspiciousMessageAlert {
-    fun show(context: Context, result: FraudAnalysisResult) {
-        val text = result.explanation.ifBlank { "Esta mensagem apresenta sinais de golpe." }
-        if (Settings.canDrawOverlays(context)) {
-            FraudAlertOverlay(context).show(text, result.score)
-        } else {
-            CallNotifications.createChannels(context)
-            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.notify(
-                7303,
-                Notification.Builder(context, CallNotifications.ALERT_CHANNEL)
-                    .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("Mensagem suspeita detectada")
-                    .setContentText(text)
-                    .setStyle(Notification.BigTextStyle().bigText(text))
-                    .setAutoCancel(true)
-                    .build()
-            )
-        }
-    }
-}
+    private const val FRESH_WINDOW_MS = 5 * 60 * 1000L
 
-private class FraudAlertOverlay(private val context: Context) {
-    private val manager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    fun show(
+        context: Context,
+        result: FraudAnalysisResult,
+        content: String,
+        sourceName: String,
+        capturedAt: Long
+    ) {
+        val appContext = context.applicationContext
+        val origin = sourceLabel(sourceName)
+        val reason = reasonFor(result)
+        val fresh = System.currentTimeMillis() - capturedAt <= FRESH_WINDOW_MS
 
-    fun show(explanation: String, score: Float) {
-        val panel = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(36, 30, 36, 28)
-            setBackgroundColor(Color.rgb(92, 20, 26))
-        }
-        panel.addView(TextView(context).apply {
-            text = "Mensagem suspeita detectada"
-            setTextColor(Color.WHITE)
-            textSize = 20f
-        })
-        panel.addView(TextView(context).apply {
-            text = "Risco ${(score * 100).toInt()}%. $explanation"
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            setPadding(0, 14, 0, 16)
-        })
-        panel.addView(Button(context).apply {
-            text = "Entendi, continuar"
-            setOnClickListener {
-                try { manager.removeView(it.parent as android.view.View) } catch (_: Exception) { }
+        CallNotifications.createChannels(appContext)
+        notify(appContext, origin, reason, content)
+
+        if (fresh) {
+            Handler(Looper.getMainLooper()).post {
+                CallOverlays.showScamAlert(
+                    context = appContext,
+                    reason = "$origin: $reason",
+                    excerpt = content,
+                    headline = "⚠  Possível GOLPE nesta mensagem",
+                    tips = CallOverlays.MESSAGE_TIPS
+                )
             }
-        })
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP }
-        try { manager.addView(panel, params) } catch (_: Exception) { }
+            vibrate(appContext)
+        }
     }
+
+    private fun reasonFor(result: FraudAnalysisResult): String =
+        result.hybrid?.justification?.takeIf { it.isNotBlank() }
+            ?: result.verdict.takeIf { it.isNotBlank() && HybridVerdict.parse(it) == null }
+            ?: result.indicators.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(prefix = "Sinais: ")
+            ?: "Esta mensagem tem sinais de golpe."
+
+    private fun notify(context: Context, origin: String, reason: String, content: String) {
+        val body = buildString {
+            append(reason)
+            append("\n\n“${content.trim().take(220)}”")
+            append("\n\n${CallOverlays.MESSAGE_TIPS}")
+        }
+        val openHistory = PendingIntent.getActivity(
+            context,
+            5,
+            Intent(context, MainActivity::class.java)
+                .setAction(MainActivity.ACTION_OPEN_HISTORY)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        context.getSystemService(NotificationManager::class.java).notify(
+            // Um aviso por mensagem (varias podem chegar seguidas).
+            MESSAGE_NOTIFICATION_BASE + (content.hashCode() and 0xFFFF),
+            Notification.Builder(context, CallNotifications.ALERT_CHANNEL)
+                .setSmallIcon(R.drawable.ic_notification_shield)
+                .setContentTitle("⚠ Possível golpe no $origin")
+                .setContentText(reason)
+                .setStyle(Notification.BigTextStyle().bigText(body))
+                .setCategory(Notification.CATEGORY_MESSAGE)
+                .setContentIntent(openHistory)
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun vibrate(context: Context) {
+        try {
+            context.getSystemService(VibratorManager::class.java)?.defaultVibrator?.vibrate(
+                VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300), -1)
+            )
+        } catch (_: Exception) { }
+    }
+
+    private const val MESSAGE_NOTIFICATION_BASE = 7400_000
 }

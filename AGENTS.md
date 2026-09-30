@@ -162,8 +162,11 @@ Por que assim (AOSP `AudioPolicyService::updateUidStates_l`, CDD 5.4.5):
 Regras de análise (cada POST /detect grava um registro no DynamoDB):
 
 - Alerta local imediato quando `CallRiskRules` chega a HIGH (combinação de categorias).
-- No máximo 2 checkpoints por ligação (+1 final), um por vez: escalada (risco local MEDIUM e >= 12
-  palavras) ou periódico (>= 60 s e >= 40 palavras novas). Para de enviar quando o servidor confirma golpe.
+- Análise ao vivo: a cada trecho reconhecido (>= 6 palavras na conversa e >= 3 novas), a conversa
+  acumulada vai para o /detect. Um envio por vez; o que chega durante o envio vai no próximo. Para
+  quando o servidor confirma golpe (teto de 60 por ligação).
+- Esses registros `source=call` ficam fora do Histórico/Início de mensagens
+  (`MessageRepository.getConfirmedFrauds` filtra); a aba Ligações tem o histórico próprio (Room).
 - Final só se nada foi enviado ou houver >= 5 palavras novas; conversa com < 8 palavras fica só no aparelho.
 - Kill switch do Perfil (`capture_enabled`) desliga os envios; a análise local continua.
 - Reenvio automático só para falha de conexão (`PENDING`). Timeout/5xx/envio interrompido = `FAILED`
@@ -171,7 +174,10 @@ Regras de análise (cada POST /detect grava um registro no DynamoDB):
 - Pop-up de golpe: `TYPE_ACCESSIBILITY_OVERLAY` (fallback `TYPE_APPLICATION_OVERLAY`), notificação de
   alta prioridade e vibração. O alerta é fechável e nunca é desfeito por uma análise "segura" posterior.
 
-Pendências para o backend (Mitchell): aceitar `session_id` para fazer upsert dos checkpoints da mesma
+Alertas de mensagem seguem o mesmo padrão (`SuspiciousMessageAlert`): pop-up via overlay de
+acessibilidade + notificação + vibração; mensagens com mais de 5 min (fila offline) só notificam.
+
+Pendências para o backend (Mitchell): aceitar `session_id` para fazer upsert das análises da mesma
 ligação e persistir `raciocinio`/`indicadores` (hoje só `veredito_curto` vai para `explanation`).
 
 Resposta esperada (status 201):

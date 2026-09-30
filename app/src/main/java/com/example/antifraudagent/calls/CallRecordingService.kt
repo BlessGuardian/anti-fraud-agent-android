@@ -276,8 +276,10 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
     }
 
     /**
-     * Cada POST /detect vira um registro no historico, entao os checkpoints sao limitados:
-     * no maximo [MAX_CHECKPOINTS] por ligacao (+1 analise final), um por vez.
+     * Analise da conversa no servidor enquanto ela acontece: a cada trecho novo reconhecido, a
+     * conversa acumulada vai para o /detect. Um envio por vez; o que chegar durante o envio vai
+     * no proximo (nada fica sem analise). Para quando o servidor confirma o golpe.
+     * Cada envio vira um registro source=call no DynamoDB; o Historico de mensagens os oculta.
      */
     private fun maybeCheckpoint(current: Session) {
         if (finalizing) return
@@ -288,12 +290,9 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
         }
         if (current.checkpointsSent >= MAX_CHECKPOINTS || current.serverConfirmedFraud) return
         val words = current.words
-        val now = SystemClock.elapsedRealtime()
-        val escalation = current.escalationPending && words >= MIN_WORDS_ESCALATION
-        val periodic = now - current.lastCheckpointAt >= PERIODIC_MS &&
-            words - current.wordsAtLastServer >= MIN_NEW_WORDS_PERIODIC &&
-            (current.localRisk.level != CallRiskLevel.LOW || !current.lowPeriodicSent)
-        if (!escalation && !periodic) return
+        val enoughContext = words >= MIN_WORDS_LIVE || current.escalationPending
+        val newWords = words - current.wordsAtLastServer
+        if (!enoughContext || newWords < MIN_NEW_WORDS_LIVE) return
 
         val startIndex = current.segmentsAtLastCheckpoint
         val endIndex = current.segments.size
@@ -517,10 +516,10 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
         private const val EXTRA_CALLER = "caller"
 
         private const val MAX_TRANSCRIPT_CHARS = 20_000
-        private const val MAX_CHECKPOINTS = 2
-        private const val MIN_WORDS_ESCALATION = 12
-        private const val MIN_NEW_WORDS_PERIODIC = 40
-        private const val PERIODIC_MS = 60_000L
+        /** Teto de seguranca por ligacao (~5-10s por analise => cobre ligacoes longas). */
+        private const val MAX_CHECKPOINTS = 60
+        private const val MIN_WORDS_LIVE = 6
+        private const val MIN_NEW_WORDS_LIVE = 3
         private const val MIN_WORDS_FINAL = 8
         private const val MIN_NEW_WORDS_FINAL = 5
         private const val ROUTE_POLL_MS = 1_500L

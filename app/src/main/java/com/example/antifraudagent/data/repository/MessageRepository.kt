@@ -128,8 +128,15 @@ class MessageRepository(context: Context) {
         processPendingMessagesInternal()
     }
 
+    /**
+     * Historico de MENSAGENS. As analises de ligacao (source=call, varias por ligacao durante a
+     * conversa) ficam na aba Ligacoes, com historico proprio.
+     */
     suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
-        withContext(Dispatchers.IO) { apiClient.getLogs(deviceId = deviceId) }
+        withContext(Dispatchers.IO) {
+            apiClient.getLogs(deviceId = deviceId, limit = 200)
+                .filterNot { it.source.equals("call", ignoreCase = true) }
+        }
 
     suspend fun analyzeManualMessage(content: String): FraudAnalysisResult =
         withContext(Dispatchers.IO) {
@@ -223,7 +230,13 @@ class MessageRepository(context: Context) {
 
         if (result.isFraud) {
             Log.d(TAG, "Fraude detectada pelo servidor | score=${result.score} | dbSynced=${result.dbSynced}")
-            SuspiciousMessageAlert.show(appContext, result)
+            SuspiciousMessageAlert.show(
+                context = appContext,
+                result = result,
+                content = message.content,
+                sourceName = message.source.name,
+                capturedAt = message.capturedAt
+            )
         } else {
             Log.d(TAG, "Servidor descartou mensagem online")
         }

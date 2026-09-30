@@ -59,20 +59,27 @@ object CallOverlays {
         speakerPrompt = null
     }
 
-    fun showScamAlert(context: Context, reason: String, excerpt: String?) {
+    const val CALL_TIPS =
+        "Não informe senhas, códigos ou dados do cartão e não faça Pix. Na dúvida, desligue e ligue você mesmo para o número oficial."
+    const val MESSAGE_TIPS =
+        "Não clique em links, não informe códigos ou senhas e não faça Pix. Confirme a história por outro canal."
+
+    fun showScamAlert(
+        context: Context,
+        reason: String,
+        excerpt: String?,
+        headline: String = "⚠  Possível GOLPE nesta ligação",
+        tips: String = CALL_TIPS
+    ) {
         hideScamAlert()
         val host = host(context) ?: return
         val card = card(context, background = "#3A0F17", border = "#FF4D5E")
-        card.addView(title(context, "⚠  Possível GOLPE nesta ligação", "#FFFFFF"))
+        card.addView(title(context, headline, "#FFFFFF"))
         card.addView(text(context, reason, "#FFE3E6"))
         if (!excerpt.isNullOrBlank()) {
             card.addView(quote(context, "“${excerpt.trim().take(180)}”"))
         }
-        card.addView(text(
-            context,
-            "Não informe senhas, códigos ou dados do cartão e não faça Pix. Na dúvida, desligue e ligue você mesmo para o número oficial.",
-            "#FFC2C9"
-        ))
+        card.addView(text(context, tips, "#FFC2C9"))
         card.addView(action(context, "Entendi", "#FF4D5E") { hideScamAlert() })
         scamAlert = add(host, wrap(context, card), Gravity.TOP)
     }

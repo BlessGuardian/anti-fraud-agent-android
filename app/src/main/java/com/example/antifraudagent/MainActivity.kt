@@ -310,7 +310,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.action == ACTION_OPEN_CALLS) requestedTab = AppTab.Calls
+        when (intent?.action) {
+            ACTION_OPEN_CALLS -> requestedTab = AppTab.Calls
+            ACTION_OPEN_HISTORY -> requestedTab = AppTab.History
+        }
     }
 
     private fun requestPermissionsIfNeeded() {
@@ -383,6 +386,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_OPEN_CALLS = "com.example.antifraudagent.action.OPEN_CALLS"
+        const val ACTION_OPEN_HISTORY = "com.example.antifraudagent.action.OPEN_HISTORY"
         private val CALL_PERMISSIONS = listOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_PHONE_STATE
