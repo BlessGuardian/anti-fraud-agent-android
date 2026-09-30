@@ -516,7 +516,7 @@ fun HomeScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            TopHandle()
+            BrandBar()
             VulnerabilityCard(
                 score = vulnerability,
                 pendingCount = pendingCount,
@@ -590,7 +590,6 @@ fun HistoryScreen(
     ScreenColumn(padding = padding) {
         item {
             PageHeader(
-                icon = Icons.Filled.Shield,
                 title = "Historico",
                 subtitle = "Todas as mensagens analisadas"
             )
@@ -653,7 +652,6 @@ fun AnalyzeScreen(
     ScreenColumn(padding = padding) {
         item {
             PageHeader(
-                icon = Icons.Filled.Shield,
                 title = "Analise Retroativa",
                 subtitle = "Cole uma mensagem suspeita para verificar"
             )
@@ -765,7 +763,6 @@ fun ProfileScreen(
     ScreenColumn(padding = padding) {
         item {
             PageHeader(
-                icon = Icons.Filled.Shield,
                 title = "Perfil",
                 subtitle = "Configure seu nivel de vigilancia"
             )
@@ -892,52 +889,42 @@ fun ScreenColumn(
 }
 
 @Composable
-fun TopHandle() {
-    Box(
+fun BrandBar() {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 4.dp),
-        contentAlignment = Alignment.Center
+            .padding(bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .width(80.dp)
-                .height(5.dp)
-                .clip(CircleShape)
-                .background(BlessPrimarySoft.copy(alpha = 0.55f))
+        Image(
+            painter = painterResource(id = R.drawable.blessguardian_logo),
+            contentDescription = null,
+            modifier = Modifier.height(32.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = "BlessGuardian",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = BlessText
         )
     }
 }
 
 @Composable
 fun PageHeader(
-    icon: ImageVector,
     title: String,
     subtitle: String
 ) {
     Column {
-        TopHandle()
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(
-                painter = painterResource(id = R.drawable.blessguardian_logo),
-                contentDescription = "BlessGuardian",
-                modifier = Modifier.size(34.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = BlessPrimary,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        Spacer(modifier = Modifier.height(6.dp))
+        BrandBar()
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = subtitle,
             color = BlessMuted,

@@ -44,7 +44,6 @@ fun CallProtectionScreen(
     ScreenColumn(padding = padding) {
         item {
             PageHeader(
-                icon = Icons.Filled.Phone,
                 title = "Ligacoes",
                 subtitle = "Transcreva chamadas no viva-voz e receba alertas de golpe"
             )
