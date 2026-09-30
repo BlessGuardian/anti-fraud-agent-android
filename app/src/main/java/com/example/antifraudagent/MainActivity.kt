@@ -211,7 +211,8 @@ class MainActivity : ComponentActivity() {
                     }
                     scope.launch {
                         val hadPending = repository.getPendingMessages().isNotEmpty()
-                        repository.processPendingMessages()
+                        // Roda fora da composicao: sair do app nao cancela o envio da fila.
+                        repository.drainQueueInBackground().join()
                         if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
                             runCatching { repository.getConfirmedFrauds() }
                                 .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
