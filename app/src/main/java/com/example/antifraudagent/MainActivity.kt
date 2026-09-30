@@ -159,7 +159,9 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 var selectedTab by remember { mutableStateOf(AppTab.Home) }
                 var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
-                var pendingCount by remember { mutableStateOf(0) }
+                val pendingCount by remember { repository.observePendingCount() }
+                    .collectAsState(initial = 0)
+                val syncState by MessageRepository.syncState.collectAsState()
                 var isLoading by remember { mutableStateOf(false) }
                 var feedback by remember { mutableStateOf<String?>(null) }
                 var manualText by remember { mutableStateOf("") }
@@ -181,16 +183,23 @@ class MainActivity : ComponentActivity() {
                         isLoading = true
                         feedback = null
                         try {
-                            repository.processPendingMessages()
-                            pendingCount = repository.getPendingMessages().size
+                            // Historico primeiro: esvaziar a fila antes deixava a tela presa em
+                            // "Consultando..." por minutos quando havia muitas pendencias.
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
                             feedback = "Historico atualizado pelo servidor."
                         } catch (e: Exception) {
-                            pendingCount = repository.getPendingMessages().size
                             feedback = "Nao foi possivel consultar o servidor: ${e.message ?: "erro desconhecido"}"
                         } finally {
                             isLoading = false
+                        }
+                    }
+                    scope.launch {
+                        val hadPending = repository.getPendingMessages().isNotEmpty()
+                        repository.processPendingMessages()
+                        if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
+                            runCatching { repository.getConfirmedFrauds() }
+                                .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
                         }
                     }
                 }
@@ -211,7 +220,6 @@ class MainActivity : ComponentActivity() {
                             manualResult = repository.analyzeManualMessage(content)
                             fraudLogs = repository.getConfirmedFrauds()
                                 .sortedByDescending { it.detectedAt }
-                            pendingCount = repository.getPendingMessages().size
                         } catch (e: Exception) {
                             manualError = e.message ?: "Nao foi possivel analisar a mensagem."
                         } finally {
@@ -236,6 +244,7 @@ class MainActivity : ComponentActivity() {
                     accessibilityEnabled = isAccessibilityEnabled,
                     captureEnabled = captureEnabled,
                     pendingCount = pendingCount,
+                    syncState = syncState,
                     logs = fraudLogs,
                     isLoading = isLoading,
                     feedback = feedback,
@@ -376,6 +385,7 @@ fun BlessGuardianApp(
     accessibilityEnabled: Boolean,
     captureEnabled: Boolean,
     pendingCount: Int,
+    syncState: MessageRepository.SyncState,
     logs: List<RemoteFraudLog>,
     isLoading: Boolean,
     feedback: String?,
@@ -414,6 +424,7 @@ fun BlessGuardianApp(
                 padding = padding,
                 logs = logs,
                 pendingCount = pendingCount,
+                syncState = syncState,
                 captureEnabled = captureEnabled,
                 isLoading = isLoading,
                 feedback = feedback,
@@ -500,6 +511,7 @@ fun HomeScreen(
     padding: PaddingValues,
     logs: List<RemoteFraudLog>,
     pendingCount: Int,
+    syncState: MessageRepository.SyncState,
     captureEnabled: Boolean,
     isLoading: Boolean,
     feedback: String?,
@@ -520,6 +532,7 @@ fun HomeScreen(
             VulnerabilityCard(
                 score = vulnerability,
                 pendingCount = pendingCount,
+                syncState = syncState,
                 captureEnabled = captureEnabled
             )
         }
@@ -934,7 +947,12 @@ fun PageHeader(
 }
 
 @Composable
-fun VulnerabilityCard(score: Float, pendingCount: Int, captureEnabled: Boolean) {
+fun VulnerabilityCard(
+    score: Float,
+    pendingCount: Int,
+    syncState: MessageRepository.SyncState,
+    captureEnabled: Boolean
+) {
     GlassPanel {
         Text(
             text = "INDICE DE VULNERABILIDADE",
@@ -964,19 +982,31 @@ fun VulnerabilityCard(score: Float, pendingCount: Int, captureEnabled: Boolean) 
         }
         Spacer(modifier = Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Pendencias nao significam "offline": com internet, o servidor pode estar lento
+            // ou fora. Cada situacao tem seu proprio texto.
             val statusVisual = when {
                 !captureEnabled -> RiskVisual("Pausado", BlessWarning, BlessWarningSoft)
+                syncState == MessageRepository.SyncState.OFFLINE ->
+                    RiskVisual("Offline", BlessWarning, BlessWarningSoft)
+                syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE ->
+                    RiskVisual("Indisponivel", BlessDanger, BlessDangerSoft)
+                syncState == MessageRepository.SyncState.SYNCING ->
+                    RiskVisual("Enviando", BlessPrimary, BlessPrimarySoft)
                 pendingCount == 0 -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
                 else -> RiskVisual("Pendente", BlessWarning, BlessWarningSoft)
             }
             val statusValue = when {
                 !captureEnabled -> "pausado"
+                syncState == MessageRepository.SyncState.OFFLINE -> "sem internet"
+                syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE -> "servidor indisponivel"
+                syncState == MessageRepository.SyncState.SYNCING -> "enviando"
                 pendingCount == 0 -> "online"
-                else -> "offline"
+                else -> "na fila"
             }
             val statusLabel = when {
                 !captureEnabled -> "sem envio"
                 pendingCount == 0 -> "protegido"
+                pendingCount == 1 -> "1 pendencia"
                 else -> "$pendingCount pendencias"
             }
             StatusPill(

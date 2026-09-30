@@ -12,10 +12,16 @@ import com.example.antifraudagent.data.local.entity.MessageStatus
 import com.example.antifraudagent.data.local.preprocessing.LocalMessagePreprocessor
 import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
+import com.example.antifraudagent.data.remote.FraudApiHttpException
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.calls.SuspiciousMessageAlert
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
@@ -33,6 +39,23 @@ class MessageRepository(context: Context) {
         private const val MIN_MESSAGE_LENGTH = 4
 
         const val MIN_SCORE_TO_SAVE = 0.4f
+
+        // Compartilhados entre as instancias (Activity, servicos de captura, SmsReceiver) do
+        // mesmo processo: garante um unico envio da fila por vez, evitando registros duplicados.
+        private val pendingQueueMutex = Mutex()
+        private val _syncState = MutableStateFlow(SyncState.IDLE)
+        val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+    }
+
+    enum class SyncState {
+        /** Nada em andamento; a ultima tentativa (se houve) funcionou. */
+        IDLE,
+        /** Enviando a fila PENDING ao servidor. */
+        SYNCING,
+        /** Ha internet, mas o servidor falhou ou nao respondeu. */
+        SERVER_UNAVAILABLE,
+        /** Aparelho sem internet. */
+        OFFLINE
     }
 
     /**
@@ -77,18 +100,32 @@ class MessageRepository(context: Context) {
         )
 
         if (!isOnline()) {
+            _syncState.value = SyncState.OFFLINE
+            enqueuePending(message)
+            return@withContext
+        }
+
+        // A mensagem atual vai primeiro: com a fila cheia, esvaziar antes atrasaria o alerta
+        // em minutos (cada analise leva ~10s no servidor).
+        try {
+            analyzeAndPersist(message)
+        } catch (e: FraudApiHttpException) {
+            if (e.isPermanent) {
+                Log.w(TAG, "Servidor rejeitou a mensagem atual (HTTP ${e.code}); descartada", e)
+            } else {
+                Log.w(TAG, "Falha ao enviar mensagem atual; salvando como PENDING", e)
+                _syncState.value = SyncState.SERVER_UNAVAILABLE
+                enqueuePending(message)
+            }
+            return@withContext
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao enviar mensagem atual; salvando como PENDING", e)
+            _syncState.value = SyncState.SERVER_UNAVAILABLE
             enqueuePending(message)
             return@withContext
         }
 
         processPendingMessagesInternal()
-
-        try {
-            analyzeAndPersist(message)
-        } catch (e: Exception) {
-            Log.w(TAG, "Falha ao enviar mensagem atual; salvando como PENDING", e)
-            enqueuePending(message)
-        }
     }
 
     suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
@@ -121,26 +158,55 @@ class MessageRepository(context: Context) {
     suspend fun getPendingMessages(): List<AnalyzedMessage> =
         withContext(Dispatchers.IO) { dao.getAllPending() }
 
+    fun observePendingCount(): Flow<Int> = dao.observePendingCount()
+
     suspend fun processPendingMessages() = withContext(Dispatchers.IO) {
         if (!settings.isCaptureEnabled()) {
             Log.d(TAG, "Envio pausado pelo usuario; fila PENDING nao sera processada")
             return@withContext
         }
-        if (!isOnline()) return@withContext
+        if (!isOnline()) {
+            _syncState.value = SyncState.OFFLINE
+            return@withContext
+        }
         processPendingMessagesInternal()
     }
 
     private suspend fun processPendingMessagesInternal() {
-        val pendingMessages = dao.getAllPending()
-        if (pendingMessages.isEmpty()) return
-
-        for (pending in pendingMessages) {
-            try {
-                analyzeAndClearPending(pending)
-            } catch (e: Exception) {
-                Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
-                break
+        // Se outra chamada ja esta enviando a fila, nao envia de novo em paralelo.
+        if (!pendingQueueMutex.tryLock()) return
+        try {
+            val pendingMessages = dao.getAllPending()
+            if (pendingMessages.isEmpty()) {
+                _syncState.value = SyncState.IDLE
+                return
             }
+
+            _syncState.value = SyncState.SYNCING
+            for (pending in pendingMessages) {
+                try {
+                    analyzeAndClearPending(pending)
+                } catch (e: FraudApiHttpException) {
+                    if (e.isPermanent) {
+                        // Reenviar nunca vai funcionar; manter travaria a fila para sempre.
+                        dao.delete(pending)
+                        Log.w(TAG, "PENDING id=${pending.id} rejeitado (HTTP ${e.code}); removido da fila", e)
+                        continue
+                    }
+                    Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
+                    _syncState.value = SyncState.SERVER_UNAVAILABLE
+                    return
+                } catch (e: Exception) {
+                    // Falha transitoria (timeout, rede, 5xx): o servidor provavelmente esta fora;
+                    // para aqui e tenta de novo no proximo gatilho, sem martelar a API.
+                    Log.w(TAG, "Interrompendo fila PENDING apos falha no id=${pending.id}", e)
+                    _syncState.value = if (isOnline()) SyncState.SERVER_UNAVAILABLE else SyncState.OFFLINE
+                    return
+                }
+            }
+            _syncState.value = SyncState.IDLE
+        } finally {
+            pendingQueueMutex.unlock()
         }
     }
 

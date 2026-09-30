@@ -46,7 +46,7 @@ class FraudApiClient(
             }
 
             if (responseCode !in 200..299) {
-                throw IOException("FastAPI returned HTTP $responseCode: $responseBody")
+                throw FraudApiHttpException(responseCode, responseBody)
             }
 
             parseResponse(responseBody)
@@ -77,7 +77,7 @@ class FraudApiClient(
             }
 
             if (responseCode !in 200..299) {
-                throw IOException("FastAPI returned HTTP $responseCode: $responseBody")
+                throw FraudApiHttpException(responseCode, responseBody)
             }
 
             parseLogs(responseBody)
@@ -145,6 +145,18 @@ class FraudApiClient(
     companion object {
         const val DEFAULT_BASE_URL = "https://e5skpalp7g.execute-api.us-east-1.amazonaws.com"
     }
+}
+
+/**
+ * Resposta HTTP fora de 2xx. Erros 4xx (exceto 408/429) sao definitivos: reenviar a mesma
+ * mensagem nunca vai funcionar. 5xx, 408 e 429 sao transitorios.
+ */
+class FraudApiHttpException(
+    val code: Int,
+    body: String
+) : IOException("FastAPI returned HTTP $code: $body") {
+    val isPermanent: Boolean
+        get() = code in 400..499 && code != 408 && code != 429
 }
 
 data class FraudAnalysisResult(

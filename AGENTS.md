@@ -36,6 +36,15 @@ Mensagem capturada
 -> historico vem de GET /logs?device_id=...
 ```
 
+Regras da fila `PENDING` (`MessageRepository`):
+
+- A mensagem atual e enviada antes da fila; so depois de um envio bem-sucedido a fila e processada.
+- Um unico envio da fila por vez no processo (`Mutex` no companion, `tryLock`): Activity, servicos de captura e `SmsReceiver` compartilham a trava, evitando registros duplicados no DynamoDB.
+- Falha transitoria (timeout, rede, HTTP 5xx/408/429) interrompe a fila; ela volta no proximo gatilho (abrir/atualizar o app, rede disponivel, nova captura).
+- HTTP 4xx definitivo (`FraudApiHttpException.isPermanent`) remove o item da fila, para ele nao travar as demais pendencias.
+- `MessageRepository.syncState` (`IDLE`, `SYNCING`, `SERVER_UNAVAILABLE`, `OFFLINE`) alimenta o card da Inicio; pendencias com internet NAO devem aparecer como "offline".
+- A tela carrega `GET /logs` primeiro e processa a fila em paralelo; o contador vem de `observePendingCount()` (Flow do Room).
+
 `SettingsRepository` (em `data/settings/SettingsRepository.kt`) e um singleton com SharedPreferences que expoe a flag `capture_enabled` (default `true`) via `StateFlow`. Compose (aba Perfil) e `MessageRepository` observam a mesma instancia. Quando desligado, `saveIfSuspicious`, `analyzeManualMessage` e `processPendingMessages` retornam cedo sem tocar Room nem HTTP.
 
 ## Camada de pre-processamento local
@@ -279,6 +288,7 @@ Quebras de build conhecidas e como evitar:
 - Captura por notificacao, SMS e acessibilidade ainda funciona.
 - Offline cria registros `PENDING`.
 - Reonline processa fila pendente.
+- Historico carrega na hora mesmo com fila grande; card mostra "enviando" durante o envio.
 - Pendencia so sai do Room com `status_db=true`.
 - `Atualizar` consulta `/logs?device_id=...`.
 - `Historico` mostra dados vindos do backend AWS (DynamoDB).
