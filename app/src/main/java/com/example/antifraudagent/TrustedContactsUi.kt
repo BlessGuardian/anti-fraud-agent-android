@@ -81,7 +81,7 @@ fun TrustedContactsPanel() {
     var showSheet by remember { mutableStateOf(false) }
 
     GlassPanel(onClick = { showSheet = true }) {
-        PanelLabel("CONTATOS CONFIAVEIS")
+        PanelLabel("CONTATOS CONFIÁVEIS")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = BlessSafe, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.width(12.dp))

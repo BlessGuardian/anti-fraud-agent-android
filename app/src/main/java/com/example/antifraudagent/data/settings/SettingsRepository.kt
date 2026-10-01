@@ -79,6 +79,21 @@ class SettingsRepository private constructor(context: Context) {
         _callProtectionEnabled.value = enabled
     }
 
+    /** Quando a protecao continua (notificacoes + acessibilidade) foi ligada; null se esta desligada. */
+    fun protectedSinceMillis(): Long? =
+        prefs.getLong(KEY_PROTECTED_SINCE, 0L).takeIf { it > 0L }
+
+    /** Chamado ao voltar ao app: guarda a data ao ligar a protecao e apaga ao desligar. */
+    fun updateProtectedSince(protectionActive: Boolean) {
+        val current = protectedSinceMillis()
+        when {
+            protectionActive && current == null ->
+                prefs.edit().putLong(KEY_PROTECTED_SINCE, System.currentTimeMillis()).apply()
+            !protectionActive && current != null ->
+                prefs.edit().remove(KEY_PROTECTED_SINCE).apply()
+        }
+    }
+
     fun setTechnicalMode(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_TECHNICAL_MODE, enabled).apply()
         _technicalMode.value = enabled
@@ -90,6 +105,7 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_CALL_PROTECTION_ENABLED = "call_protection_enabled"
         private const val KEY_TECHNICAL_MODE = "technical_mode"
         private const val KEY_REINFORCED_PROTECTION = "reinforced_protection"
+        private const val KEY_PROTECTED_SINCE = "protected_since"
         private const val DEFAULT_CAPTURE_ENABLED = true
         private const val DEFAULT_CALL_PROTECTION_ENABLED = false
 

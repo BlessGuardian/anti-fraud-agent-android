@@ -50,6 +50,10 @@ object LocalMessagePreprocessor {
             return reject("data ou separador", packageName)
         }
 
+        if (isNotificationSummary(normalized)) {
+            return reject("resumo de notificacoes", packageName)
+        }
+
         if (!hasRelevantSignal && isKnownSystemNoise(normalized)) {
             return reject("ruido de sistema", packageName)
         }
@@ -115,6 +119,13 @@ object LocalMessagePreprocessor {
         return false
     }
 
+    /**
+     * Notificacao de resumo do WhatsApp/Telegram ("4 mensagens de 2 conversas", "3 novas mensagens"):
+     * so contagem, nunca conteudo. Antes chegava ao servidor e virava "sem conteudo para avaliar".
+     */
+    internal fun isNotificationSummary(text: String): Boolean =
+        NOTIFICATION_SUMMARY_REGEX.matches(text.trim())
+
     private fun isKnownSystemNoise(text: String): Boolean {
         val lower = text.lowercase()
         if (lower in SYSTEM_EXACT_MATCHES) return true
@@ -172,6 +183,12 @@ object LocalMessagePreprocessor {
 
     private val DATE_WRITTEN_REGEX =
         Regex("""^\d{1,2}\s+de\s+\p{L}+(\s+de\s+\d{4})?$""", RegexOption.IGNORE_CASE)
+
+    private val NOTIFICATION_SUMMARY_REGEX = Regex(
+        """^\d+\s+(novas?\s+)?mensage(m|ns)(\s+novas?)?(\s+n[aã]o\s+lidas?)?(\s+de\s+\d+\s+(conversas?|chats?))?$""" +
+            """|^\d+\s+(new\s+|unread\s+)?messages?(\s+from\s+\d+\s+chats?)?$""",
+        RegexOption.IGNORE_CASE
+    )
 
     private val DATE_SEPARATORS = setOf(
         "hoje", "ontem", "anteontem", "amanha", "amanhã",
