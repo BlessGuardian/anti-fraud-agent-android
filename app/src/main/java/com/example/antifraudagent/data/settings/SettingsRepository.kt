@@ -9,7 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Preferencias locais do usuario.
  *
- * Hoje guarda apenas o kill switch de envio (`capture_enabled`). Quando desligado,
+ * Guarda o kill switch de envio (`capture_enabled`), a protecao de ligacoes e o modo
+ * tecnico (`technical_mode`). Com o kill switch desligado,
  * nenhuma mensagem capturada pelos servicos (notificacao, acessibilidade, SMS)
  * nem analise manual vai para o backend AWS. Util para testes com dados sensiveis
  * no celular pessoal sem desinstalar o app nem revogar permissoes do sistema.
@@ -30,9 +31,20 @@ class SettingsRepository private constructor(context: Context) {
         prefs.getBoolean(KEY_CALL_PROTECTION_ENABLED, DEFAULT_CALL_PROTECTION_ENABLED)
     )
 
+    private val _technicalMode = MutableStateFlow(
+        prefs.getBoolean(KEY_TECHNICAL_MODE, false)
+    )
+
     /** Flag observavel pelo Compose. */
     val captureEnabled: StateFlow<Boolean> = _captureEnabled.asStateFlow()
     val callProtectionEnabled: StateFlow<Boolean> = _callProtectionEnabled.asStateFlow()
+
+    /**
+     * Modo tecnico: mostra o "comite" de algoritmos (LLM x modelo local) no detalhe.
+     * Desligado por padrao; liberado por toques no logo. Provisorio ate existir login,
+     * quando passa a valer so para administrador.
+     */
+    val technicalMode: StateFlow<Boolean> = _technicalMode.asStateFlow()
 
     /** Leitura sincrona chamada pelos servicos antes de salvar/enviar. */
     fun isCaptureEnabled(): Boolean = _captureEnabled.value
@@ -49,10 +61,16 @@ class SettingsRepository private constructor(context: Context) {
         _callProtectionEnabled.value = enabled
     }
 
+    fun setTechnicalMode(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TECHNICAL_MODE, enabled).apply()
+        _technicalMode.value = enabled
+    }
+
     companion object {
         private const val PREFS_NAME = "antifraud_settings"
         private const val KEY_CAPTURE_ENABLED = "capture_enabled"
         private const val KEY_CALL_PROTECTION_ENABLED = "call_protection_enabled"
+        private const val KEY_TECHNICAL_MODE = "technical_mode"
         private const val DEFAULT_CAPTURE_ENABLED = true
         private const val DEFAULT_CALL_PROTECTION_ENABLED = false
 

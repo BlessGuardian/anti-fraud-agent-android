@@ -40,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +54,8 @@ import com.example.antifraudagent.data.local.call.CallTranscriptSyncStatus
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
 import com.example.antifraudagent.data.remote.RemoteFraudLog
+import com.example.antifraudagent.data.remote.RiskLevel
+import com.example.antifraudagent.data.remote.meaningfulScore
 import com.example.antifraudagent.ui.theme.BlessBorder
 import com.example.antifraudagent.ui.theme.BlessDanger
 import com.example.antifraudagent.ui.theme.BlessDangerSoft
@@ -126,15 +129,19 @@ fun formatDuration(millis: Long): String {
     return if (minutes > 0) "${minutes}min ${seconds}s" else "${seconds}s"
 }
 
-private fun verdictFor(isFraud: Boolean, hybrid: HybridVerdict?): DetailVerdict = when {
-    hybrid?.status?.equals("AVISO", ignoreCase = true) == true -> DetailVerdict.SUSPICIOUS
-    isFraud -> DetailVerdict.FRAUD
-    else -> DetailVerdict.SAFE
-}
+/** Mostra o "comite" de algoritmos (LLM x modelo local) no detalhe. Ver SettingsRepository.technicalMode. */
+val LocalTechnicalMode = compositionLocalOf { false }
+
+private fun verdictFor(isFraud: Boolean, hybrid: HybridVerdict?): DetailVerdict =
+    when (RiskLevel.of(isFraud, hybrid)) {
+        RiskLevel.HIGH -> DetailVerdict.FRAUD
+        RiskLevel.ATTENTION -> DetailVerdict.SUSPICIOUS
+        RiskLevel.SAFE -> DetailVerdict.SAFE
+    }
 
 private fun headlineFor(verdict: DetailVerdict, isCall: Boolean): String = when (verdict) {
-    DetailVerdict.FRAUD -> if (isCall) "Golpe detectado nesta ligação" else "Golpe detectado"
-    DetailVerdict.SUSPICIOUS -> "Suspeita de golpe"
+    DetailVerdict.FRAUD -> if (isCall) "Golpe detectado nesta ligação" else "Alta probabilidade de golpe"
+    DetailVerdict.SUSPICIOUS -> "Atenção: pode ser golpe"
     DetailVerdict.SAFE -> if (isCall) "Ligação tranquila" else "Nenhum sinal de golpe"
     DetailVerdict.PENDING -> "Aguardando análise"
 }
@@ -152,7 +159,7 @@ fun RemoteFraudLog.toDetail(): AnalysisDetail {
         title = sourceLabel(source),
         subtitle = formatBackendDateTime(detectedAt),
         verdict = verdict,
-        score = riskScore,
+        score = riskScore.meaningfulScore(),
         headline = headlineFor(verdict, source.equals("call", true)),
         justification = readableJustification(hybrid, explanation),
         reasoning = null,
@@ -165,7 +172,7 @@ fun RemoteFraudLog.toDetail(): AnalysisDetail {
         facts = listOfNotNull(
             "Origem" to sourceLabel(source),
             "Data e hora" to formatBackendDateTime(detectedAt),
-            "Pontuação de risco" to scorePercent(riskScore)
+            riskScore.meaningfulScore()?.let { "Pontuação de risco" to scorePercent(it) }
         ),
         notice = null
     )
@@ -178,7 +185,7 @@ fun FraudAnalysisResult.toDetail(analyzedText: String, analyzedAt: Long): Analys
         title = "Análise manual",
         subtitle = formatMillis(analyzedAt),
         verdict = verdictKind,
-        score = score,
+        score = score.meaningfulScore(),
         headline = headlineFor(verdictKind, isCall = false),
         justification = readableJustification(hybrid, verdict) ?: explanation.takeIf { it.isNotBlank() },
         reasoning = reasoning.takeIf { it.isNotBlank() },
@@ -190,7 +197,7 @@ fun FraudAnalysisResult.toDetail(analyzedText: String, analyzedAt: Long): Analys
         content = analyzedText,
         facts = listOfNotNull(
             "Categoria" to categoryLabel(category),
-            "Pontuação de risco" to scorePercent(score),
+            score.meaningfulScore()?.let { "Pontuação de risco" to scorePercent(it) },
             if (dbSynced) "Histórico" to "Gravado no histórico oficial" else null
         ),
         notice = null
@@ -214,7 +221,7 @@ fun CallTranscript.toDetail(): AnalysisDetail {
         title = callerNumber?.let { "Ligação de $it" } ?: "Ligação recebida",
         subtitle = formatMillis(startedAt),
         verdict = verdictKind,
-        score = riskScore,
+        score = riskScore.meaningfulScore(),
         headline = headline,
         // Veredito legivel da ligacao (ex.: motivo do alerta local) vem antes da justificativa do servidor.
         justification = verdict?.takeIf { it.isNotBlank() && HybridVerdict.parse(it) == null }
@@ -233,7 +240,7 @@ fun CallTranscript.toDetail(): AnalysisDetail {
             "Viva-voz" to if (speakerUsed) "Ativado" else "Não ativado",
             alertAtMillis?.let { "Alerta emitido" to "${formatDuration(it - startedAt)} após atender" },
             alertSource?.let { "Detectado por" to if (it == "local") "Regras no aparelho" else "Análise da IA" },
-            riskScore?.let { "Pontuação de risco" to scorePercent(it) }
+            riskScore.meaningfulScore()?.let { "Pontuação de risco" to scorePercent(it) }
         ),
         notice = captureIssue ?: syncError
     )
@@ -304,7 +311,8 @@ fun AnalysisDetailSheet(detail: AnalysisDetail, onDismiss: () -> Unit) {
                 }
             }
 
-            detail.hybrid?.let { hybrid ->
+            // Comite de algoritmos: so no modo tecnico (para o leigo, dois votos diferentes confundem).
+            detail.hybrid?.takeIf { LocalTechnicalMode.current }?.let { hybrid ->
                 DetailSection(title = "Como foi decidido") {
                     DecisionRow("Inteligência artificial", hybrid.llm)
                     DecisionRow("Modelo local", hybrid.localModel)
@@ -480,8 +488,11 @@ private fun QuoteBlock(text: String, accent: androidx.compose.ui.graphics.Color)
 @Composable
 private fun DecisionRow(label: String, value: String?) {
     if (value.isNullOrBlank()) return
-    val isFraud = value.contains("fraude", ignoreCase = true) || value.contains("golpe", ignoreCase = true) ||
-        value.equals("aviso", ignoreCase = true)
+    val color = when {
+        value.equals("aviso", ignoreCase = true) -> BlessWarning
+        value.contains("fraude", ignoreCase = true) || value.contains("golpe", ignoreCase = true) -> BlessDanger
+        else -> com.example.antifraudagent.ui.theme.BlessSafe
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -490,7 +501,7 @@ private fun DecisionRow(label: String, value: String?) {
         Text(label, color = BlessText, style = MaterialTheme.typography.bodyLarge)
         Text(
             value,
-            color = if (isFraud) BlessDanger else com.example.antifraudagent.ui.theme.BlessSafe,
+            color = color,
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.bodyLarge
         )

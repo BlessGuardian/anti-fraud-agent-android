@@ -13,6 +13,7 @@ import com.example.antifraudagent.MainActivity
 import com.example.antifraudagent.R
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
+import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.sourceLabel
 
 /**
@@ -21,6 +22,10 @@ import com.example.antifraudagent.sourceLabel
  *
  * Mensagens antigas (fila offline enviada depois) so geram notificacao: um pop-up minutos depois
  * da mensagem chegar confundiria mais do que ajudaria.
+ *
+ * O texto e generico, para o usuario leigo: quando os dois algoritmos concordam (FRAUDE) diz que a
+ * probabilidade de golpe e alta; quando so um acusa (AVISO) e so notificacao de atencao, sem pop-up.
+ * O detalhe tecnico fica na folha de detalhes do app.
  */
 object SuspiciousMessageAlert {
     private const val FRESH_WINDOW_MS = 5 * 60 * 1000L
@@ -35,18 +40,20 @@ object SuspiciousMessageAlert {
         val appContext = context.applicationContext
         val origin = sourceLabel(sourceName)
         val reason = reasonFor(result)
+        val high = result.riskLevel == RiskLevel.HIGH
         val fresh = System.currentTimeMillis() - capturedAt <= FRESH_WINDOW_MS
 
         CallNotifications.createChannels(appContext)
-        notify(appContext, origin, reason, content)
+        val title = if (high) "⚠ Alta probabilidade de golpe no $origin" else "Atenção: mensagem suspeita no $origin"
+        notify(appContext, title, reason, content)
 
-        if (fresh) {
+        if (fresh && high) {
             Handler(Looper.getMainLooper()).post {
                 CallOverlays.showScamAlert(
                     context = appContext,
                     reason = "$origin: $reason",
                     excerpt = content,
-                    headline = "⚠  Possível GOLPE nesta mensagem",
+                    headline = "⚠  Alta probabilidade de GOLPE",
                     tips = CallOverlays.MESSAGE_TIPS
                 )
             }
@@ -60,7 +67,7 @@ object SuspiciousMessageAlert {
             ?: result.indicators.takeIf { it.isNotEmpty() }?.take(3)?.joinToString(prefix = "Sinais: ")
             ?: "Esta mensagem tem sinais de golpe."
 
-    private fun notify(context: Context, origin: String, reason: String, content: String) {
+    private fun notify(context: Context, title: String, reason: String, content: String) {
         val body = buildString {
             append(reason)
             append("\n\n“${content.trim().take(220)}”")
@@ -79,7 +86,7 @@ object SuspiciousMessageAlert {
             MESSAGE_NOTIFICATION_BASE + (content.hashCode() and 0xFFFF),
             Notification.Builder(context, CallNotifications.ALERT_CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification_shield)
-                .setContentTitle("⚠ Possível golpe no $origin")
+                .setContentTitle(title)
                 .setContentText(reason)
                 .setStyle(Notification.BigTextStyle().bigText(body))
                 .setCategory(Notification.CATEGORY_MESSAGE)

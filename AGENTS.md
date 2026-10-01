@@ -42,6 +42,7 @@ Regras da fila `PENDING` (`MessageRepository`):
 - Um unico envio da fila por vez no processo (`Mutex` no companion, `tryLock`): Activity, servicos de captura e `SmsReceiver` compartilham a trava, evitando registros duplicados no DynamoDB.
 - Falha transitoria (timeout, rede, HTTP 5xx/408/429) interrompe a fila; ela volta no proximo gatilho (abrir/atualizar o app, rede disponivel, nova captura).
 - HTTP 4xx definitivo (`FraudApiHttpException.isPermanent`) remove o item da fila, para ele nao travar as demais pendencias.
+- O kill switch e conferido a cada item: desligar o envio com a fila em andamento interrompe no proximo item.
 - `MessageRepository.syncState` (`IDLE`, `SYNCING`, `SERVER_UNAVAILABLE`, `OFFLINE`) alimenta o card da Inicio; pendencias com internet NAO devem aparecer como "offline".
 - A tela carrega `GET /logs` primeiro e processa a fila em paralelo; o contador vem de `observePendingCount()` (Flow do Room).
 
@@ -176,6 +177,8 @@ Regras de análise (cada POST /detect grava um registro no DynamoDB):
 
 Alertas de mensagem seguem o mesmo padrão (`SuspiciousMessageAlert`): pop-up via overlay de
 acessibilidade + notificação + vibração; mensagens com mais de 5 min (fila offline) só notificam.
+O pop-up só aparece em `RiskLevel.HIGH` ("Alta probabilidade de golpe"); `ATTENTION` gera apenas
+notificação de atenção. O texto é genérico, para o usuário leigo.
 
 Pendências para o backend (Mitchell): aceitar `session_id` para fazer upsert das análises da mesma
 ligação e persistir `raciocinio`/`indicadores` (hoje só `veredito_curto` vai para `explanation`).
@@ -268,9 +271,31 @@ A tela principal deve:
 - nao usar Room como fonte do historico.
 
 O `vulnerability_score` exibido no `VulnerabilityCard` e calculado **client-side**
-em `MainActivity.kt` a partir da media de `risk_score` dos logs retornados pelo
-backend (`logs.map { riskScore }.average()`). Nao existe endpoint que devolva
-esse agregado; nao tentar buscar do backend.
+em `MainActivity.kt` (`vulnerabilityScore(logs)`) a partir da media de `risk_score` dos logs
+retornados pelo backend. Nao existe endpoint que devolva esse agregado; nao tentar buscar do backend.
+
+O backend hibrido ainda grava `score=0`. Zero e tratado como "sem pontuacao" (`meaningfulScore()`):
+o app nao mostra "0%"/"0.00"; o card mostra "—" / "em calculo" e o risco atual vem do pior veredito
+dos ultimos 7 dias (`currentRiskLevel`). Quando o backend mandar score real, ele volta a aparecer.
+
+### Nivel de risco (RiskLevel)
+
+`RiskLevel` (em `FraudApiClient.kt`) e a fonte unica do nivel exibido em cards, filtros, contadores,
+detalhe e pop-up. Vem do `status_final` do veredito hibrido:
+
+- `fraude` (LLM e modelo local concordam) -> `HIGH` ("Alto risco" / "Alta probabilidade de golpe");
+- `aviso` (so um acusou) -> `ATTENTION` ("Atenção"); nao conta como golpe confirmado;
+- `seguro` -> `SAFE`;
+- sem veredito hibrido -> `is_fraud` decide (HIGH ou SAFE).
+
+Nao usar `isFraud` direto na UI: o backend grava `is_fraud=true` tambem para `aviso`.
+
+### Modo tecnico
+
+O bloco "Como foi decidido" (votos do LLM e do modelo local) so aparece com o modo tecnico ligado
+(`SettingsRepository.technicalMode`, exposto via `LocalTechnicalMode`). Desligado por padrao.
+Liga/desliga com 7 toques seguidos no logo do topo; ligado, aparece o painel "Modo tecnico" no Perfil
+para desligar. Solucao provisoria ate existir login: depois, so administrador.
 
 ## Analise manual
 
