@@ -14,6 +14,8 @@ import com.example.antifraudagent.R
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
 import com.example.antifraudagent.data.remote.RiskLevel
+import com.example.antifraudagent.data.settings.SettingsRepository
+import com.example.antifraudagent.services.FraudAccessibilityService
 import com.example.antifraudagent.sourceLabel
 
 /**
@@ -55,12 +57,18 @@ object SuspiciousMessageAlert {
         notify(appContext, title, reason, content)
 
         if (fresh && high) {
+            val reinforced = SettingsRepository.getInstance(appContext).isReinforcedProtection()
             Handler(Looper.getMainLooper()).post {
+                // Protecao reforcada: tira o usuario do app da conversa (volta para a tela inicial).
+                val closed = reinforced &&
+                    FraudAccessibilityService.instance?.performGlobalAction(
+                        android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME
+                    ) == true
                 CallOverlays.showScamAlert(
                     context = appContext,
-                    reason = "$origin: $reason",
+                    reason = if (closed) "O BlessGuardian fechou o $origin para proteger você. $reason" else "$origin: $reason",
                     excerpt = content,
-                    headline = "⚠  Alta probabilidade de GOLPE",
+                    headline = if (closed) "⛔  Mensagem de GOLPE bloqueada" else "⚠  Alta probabilidade de GOLPE",
                     tips = CallOverlays.MESSAGE_TIPS
                 )
             }

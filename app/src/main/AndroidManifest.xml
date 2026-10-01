@@ -16,6 +16,8 @@
     <!-- Protecao de chamadas: microfone + estado do telefone (detectar atendimento/fim). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <!-- Protecao reforcada: encerrar ligacao de golpe (alto risco). Pedida so ao ativar a opcao. -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>

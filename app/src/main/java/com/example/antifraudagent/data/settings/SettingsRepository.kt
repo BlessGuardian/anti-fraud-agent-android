@@ -31,6 +31,10 @@ class SettingsRepository private constructor(context: Context) {
         prefs.getBoolean(KEY_CALL_PROTECTION_ENABLED, DEFAULT_CALL_PROTECTION_ENABLED)
     )
 
+    private val _reinforcedProtection = MutableStateFlow(
+        prefs.getBoolean(KEY_REINFORCED_PROTECTION, false)
+    )
+
     private val _technicalMode = MutableStateFlow(
         prefs.getBoolean(KEY_TECHNICAL_MODE, false)
     )
@@ -45,6 +49,20 @@ class SettingsRepository private constructor(context: Context) {
      * quando passa a valer so para administrador.
      */
     val technicalMode: StateFlow<Boolean> = _technicalMode.asStateFlow()
+
+    /**
+     * Protecao reforcada (base do futuro modo idoso/crianca): em ALTO risco o app derruba a
+     * ligacao e fecha o app de conversa, alem do aviso. Provisorio no Perfil ate existir login;
+     * depois quem liga/desliga e o responsavel.
+     */
+    val reinforcedProtection: StateFlow<Boolean> = _reinforcedProtection.asStateFlow()
+
+    fun isReinforcedProtection(): Boolean = _reinforcedProtection.value
+
+    fun setReinforcedProtection(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_REINFORCED_PROTECTION, enabled).apply()
+        _reinforcedProtection.value = enabled
+    }
 
     /** Leitura sincrona chamada pelos servicos antes de salvar/enviar. */
     fun isCaptureEnabled(): Boolean = _captureEnabled.value
@@ -71,6 +89,7 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_CAPTURE_ENABLED = "capture_enabled"
         private const val KEY_CALL_PROTECTION_ENABLED = "call_protection_enabled"
         private const val KEY_TECHNICAL_MODE = "technical_mode"
+        private const val KEY_REINFORCED_PROTECTION = "reinforced_protection"
         private const val DEFAULT_CAPTURE_ENABLED = true
         private const val DEFAULT_CALL_PROTECTION_ENABLED = false
 

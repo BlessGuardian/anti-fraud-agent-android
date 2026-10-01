@@ -241,6 +241,25 @@ Resposta (status 200):
 
 `{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
 
+## Protecao reforcada
+
+Base do futuro modo idoso/crianca (`SettingsRepository.reinforcedProtection`, opcao no Perfil).
+Provisoria ate existir login: depois quem liga/desliga e o responsavel, pela conta dele.
+
+- So age em `RiskLevel.HIGH`. Regras locais da ligacao sozinhas e `ATTENTION` nunca derrubam a
+  ligacao nem fecham app (alarme falso nao pode cortar a conversa de um parente).
+- Ligacao: checkpoint do servidor com HIGH -> `CallTerminator.endCall` + aviso "Ligação de GOLPE
+  encerrada" (`CallRecordingService.terminateIfReinforced`).
+- Mensagem recente com HIGH -> `GLOBAL_ACTION_HOME` pelo servico de acessibilidade (fecha o app da
+  conversa) + aviso "Mensagem de GOLPE bloqueada" (`SuspiciousMessageAlert`).
+- `CallTerminator`: 1) `TelecomManager.endCall()` com `ANSWER_PHONE_CALLS` (depreciado, mas
+  testado e funcionando no S24 / One UI, targetSdk 36, ligacao atendida); 2) reserva: acessibilidade
+  toca no botao de encerrar do discador. A permissao so e pedida ao ligar a opcao.
+- Build debug: `DebugEndCallReceiver` testa sem golpe real:
+  `adb shell am broadcast -n com.example.antifraudagent/.debug.DebugEndCallReceiver` (encerra a
+  ligacao) e `... --es mode message` (simula mensagem HIGH no WhatsApp).
+- Falta (depende de login/backend): vincular responsavel pelo nome de usuario e notifica-lo na hora.
+
 ## Contatos confiaveis
 
 Lista local (Room v4, tabela `trusted_contacts`; `TrustedContactRepository`). Nunca vai ao backend.
