@@ -13,6 +13,9 @@ import com.example.antifraudagent.data.local.call.CallTranscriptSyncStatus
 import com.example.antifraudagent.data.local.entity.AnalyzedMessage
 import com.example.antifraudagent.data.local.entity.MessageSource
 import com.example.antifraudagent.data.local.entity.MessageStatus
+import com.example.antifraudagent.data.local.trusted.TrustedContact
+import com.example.antifraudagent.data.local.trusted.TrustedContactDao
+import com.example.antifraudagent.data.local.trusted.TrustedContactOrigin
 
 // -----------------------------------------------------------------------------
 // Type Converters — Room só armazena tipos primitivos nativamente.
@@ -28,6 +31,9 @@ class Converters {
 
     @TypeConverter fun callSyncStatusToString(value: CallTranscriptSyncStatus): String = value.name
     @TypeConverter fun stringToCallSyncStatus(value: String): CallTranscriptSyncStatus = CallTranscriptSyncStatus.valueOf(value)
+
+    @TypeConverter fun trustedOriginToString(value: TrustedContactOrigin): String = value.name
+    @TypeConverter fun stringToTrustedOrigin(value: String): TrustedContactOrigin = TrustedContactOrigin.valueOf(value)
 }
 
 // -----------------------------------------------------------------------------
@@ -35,8 +41,8 @@ class Converters {
 // -----------------------------------------------------------------------------
 
 @Database(
-    entities = [AnalyzedMessage::class, CallTranscript::class],
-    version  = 3,
+    entities = [AnalyzedMessage::class, CallTranscript::class, TrustedContact::class],
+    version  = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -44,6 +50,7 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun analyzedMessageDao(): AnalyzedMessageDao
     abstract fun callTranscriptDao(): CallTranscriptDao
+    abstract fun trustedContactDao(): TrustedContactDao
 
     companion object {
         @Volatile
@@ -60,7 +67,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "antifraud_database"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { INSTANCE = it }
             }
         }
 
@@ -94,6 +101,18 @@ abstract class AppDatabase : RoomDatabase() {
                 ).forEach { column ->
                     database.execSQL("ALTER TABLE `call_transcripts` ADD COLUMN $column")
                 }
+            }
+        }
+
+        /** v4: contatos confiaveis (lista local; nunca vai ao backend). */
+        private val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `trusted_contacts` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT, " +
+                        "`phone` TEXT, `phoneDigits` TEXT, `origin` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL)"
+                )
             }
         }
     }

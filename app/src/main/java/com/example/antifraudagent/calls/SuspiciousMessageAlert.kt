@@ -35,11 +35,18 @@ object SuspiciousMessageAlert {
         result: FraudAnalysisResult,
         content: String,
         sourceName: String,
-        capturedAt: Long
+        capturedAt: Long,
+        fromTrustedContact: Boolean = false
     ) {
         val appContext = context.applicationContext
         val origin = sourceLabel(sourceName)
-        val reason = reasonFor(result)
+        // Contato confiavel so chega aqui em alto risco: o aviso explica a possivel conta clonada.
+        val reason = if (fromTrustedContact) {
+            "Mesmo vindo de um contato conhecido, esta mensagem parece golpe. A conta pode ter sido clonada: " +
+                "confirme ligando para a pessoa. ${reasonFor(result)}"
+        } else {
+            reasonFor(result)
+        }
         val high = result.riskLevel == RiskLevel.HIGH
         val fresh = System.currentTimeMillis() - capturedAt <= FRESH_WINDOW_MS
 
