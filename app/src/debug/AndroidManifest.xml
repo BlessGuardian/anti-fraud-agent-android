@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- So no build debug: gatilho de teste do encerramento de ligacao (ver DebugEndCallReceiver). -->
+        <receiver
+            android:name=".debug.DebugEndCallReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

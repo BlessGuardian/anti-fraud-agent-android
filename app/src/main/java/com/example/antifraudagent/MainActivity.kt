@@ -849,6 +849,7 @@ fun ProfileScreen(
                     enabled = false,
                     onClick = {}
                 )
+                ReinforcedProtectionRow()
                 ProtectionToggleRow(
                     title = "Modo supervisionado",
                     subtitle = "Planejado para avisar responsavel em golpes graves",

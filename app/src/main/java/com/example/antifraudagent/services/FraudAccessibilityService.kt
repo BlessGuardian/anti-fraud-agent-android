@@ -68,6 +68,9 @@ class FraudAccessibilityService : AccessibilityService() {
             "com.samsung.android.messaging:id/message_edit_text"
         )
 
+        /** Rotulos (contentDescription/texto) do botao de encerrar em pt-BR e en. */
+        private val END_CALL_LABELS = listOf("encerrar chamada", "finalizar chamada", "desligar", "end call", "hang up")
+
         fun isEnabled(context: Context): Boolean {
             val expected = ComponentName(context, FraudAccessibilityService::class.java)
             val flat = Settings.Secure.getString(
@@ -112,6 +115,39 @@ class FraudAccessibilityService : AccessibilityService() {
         // O sistema mantem este servico ligado: e daqui que a protecao de chamadas fica armada.
         callStateMonitor = CallStateMonitor(this).also { it.start() }
         Log.d(TAG, "AccessibilityService conectado ✅")
+    }
+
+    /**
+     * Procura o botao de encerrar na tela de chamada (qualquer discador) e toca nele.
+     * Usado pela protecao reforcada quando TelecomManager.endCall nao funciona.
+     */
+    fun clickEndCallButton(): Boolean {
+        val roots = buildList {
+            windows?.forEach { window -> window.root?.let { add(it) } }
+            rootInActiveWindow?.let { add(it) }
+        }
+        for (root in roots) {
+            val button = findEndCallNode(root) ?: continue
+            Log.d(TAG, "Botao de encerrar: pkg=${root.packageName} id=${button.viewIdResourceName} desc=${button.contentDescription}")
+            var target: AccessibilityNodeInfo? = button
+            while (target != null && !target.isClickable) target = target.parent
+            if (target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
+        }
+        Log.d(TAG, "Botao de encerrar nao encontrado em ${roots.map { it.packageName }}")
+        return false
+    }
+
+    private fun findEndCallNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val id = node.viewIdResourceName.orEmpty().lowercase()
+        val desc = (node.contentDescription ?: node.text)?.toString().orEmpty().lowercase()
+        val isEndCall = (id.contains("end") && id.contains("call")) || id.contains("disconnect") ||
+            END_CALL_LABELS.any { desc == it || (it.contains(' ') && desc.startsWith(it)) }
+        if (isEndCall && node.isVisibleToUser) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            findEndCallNode(child)?.let { return it }
+        }
+        return null
     }
 
     /** Rearma depois que o usuario concede READ_PHONE_STATE com o servico ja conectado. */

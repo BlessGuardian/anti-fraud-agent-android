@@ -20,6 +20,7 @@ import com.example.antifraudagent.data.local.call.CallTranscript
 import com.example.antifraudagent.data.local.call.CallTranscriptSyncStatus
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
+import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,7 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
         var wordsAtLastServer = 0
         var lastServer: FraudAnalysisResult? = null
         var serverConfirmedFraud = false
+        var callTerminated = false
         var alertAt: Long? = null
         var alertSource: String? = null
         var alertReason: String? = null
@@ -321,6 +323,7 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
                         current.alertReason = reason
                         CallProtectionState.update { it.copy(alertReason = reason) }
                     }
+                    if (result.riskLevel == RiskLevel.HIGH) terminateIfReinforced(current, reason, excerpt)
                 }
             }
             if (current.checkpointDirty) {
@@ -341,6 +344,25 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
         vibrate()
         CallProtectionState.update { it.copy(alertShown = true, alertReason = reason) }
         refreshNotification(force = true)
+    }
+
+    /**
+     * Protecao reforcada: so com ALTO risco do servidor (IA e modelo local concordam). Regras locais
+     * sozinhas ou AVISO nunca derrubam a ligacao, para um alarme falso nao cortar a conversa.
+     */
+    private fun terminateIfReinforced(current: Session, reason: String, excerpt: String?) {
+        if (current.callTerminated || !SettingsRepository.getInstance(this).isReinforcedProtection()) return
+        current.callTerminated = true
+        val outcome = CallTerminator.endCall(this)
+        Log.d(TAG, "Protecao reforcada: encerramento da ligacao = $outcome")
+        if (outcome == CallTerminator.Result.FAILED) return
+        CallOverlays.showScamAlert(
+            context = this,
+            reason = "O BlessGuardian encerrou esta ligação porque ela tem sinais fortes de golpe. $reason",
+            excerpt = excerpt,
+            headline = "⛔  Ligação de GOLPE encerrada"
+        )
+        CallProtectionState.update { it.copy(alertReason = "Ligação encerrada pelo BlessGuardian. $reason") }
     }
 
     private fun vibrate() {
