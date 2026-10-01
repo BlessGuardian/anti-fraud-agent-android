@@ -307,6 +307,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
+        SettingsRepository.getInstance(this).updateProtectedSince(isNotificationEnabled && isAccessibilityEnabled)
         refreshCallScreeningState()
         refreshCallRequirements()
     }
@@ -473,6 +474,7 @@ fun BlessGuardianApp(
         topBar = {
             BlessTopBar(
                 selectedTab = selectedTab,
+                protectionActive = notificationEnabled && accessibilityEnabled,
                 captureEnabled = captureEnabled,
                 pendingCount = pendingCount,
                 syncState = syncState,
@@ -540,7 +542,8 @@ fun BlessGuardianApp(
                 onRequestAccessibility = onRequestAccessibility,
                 onCaptureEnabledChange = onCaptureEnabledChange,
                 technicalMode = technicalMode,
-                onTechnicalModeChange = onTechnicalModeChange
+                onTechnicalModeChange = onTechnicalModeChange,
+                onOpenCalls = { onTabSelected(AppTab.Calls) }
             )
         }
     }
@@ -819,8 +822,13 @@ fun ProfileScreen(
     onRequestAccessibility: () -> Unit,
     onCaptureEnabledChange: (Boolean) -> Unit,
     technicalMode: Boolean,
-    onTechnicalModeChange: (Boolean) -> Unit
+    onTechnicalModeChange: (Boolean) -> Unit,
+    onOpenCalls: () -> Unit
 ) {
+    val context = LocalContext.current
+    val settings = remember { SettingsRepository.getInstance(context) }
+    val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
+    val protectedSince = remember(notificationEnabled, accessibilityEnabled) { settings.protectedSinceMillis() }
     val analyzedCount = logs.size
     val blockedCount = logs.count { it.riskLevel == RiskLevel.HIGH }
     val attentionCount = logs.count { it.riskLevel == RiskLevel.ATTENTION }
@@ -833,26 +841,30 @@ fun ProfileScreen(
 
         item {
             GlassPanel {
-                PanelLabel("MODO DE PROTECAO")
+                PanelLabel("MODO DE PROTEÇÃO")
                 ProtectionToggleRow(
-                    title = "Protecao continua",
-                    subtitle = "Ativa notificacoes e acessibilidade",
+                    title = "Proteção contínua",
+                    subtitle = "Ativa notificações e acessibilidade",
                     checked = notificationEnabled && accessibilityEnabled,
                     onClick = {
                         if (!notificationEnabled) onRequestNotification() else onRequestAccessibility()
                     }
                 )
+                // Estado real da protecao de ligacoes; a configuracao fica na aba Ligacoes.
                 ProtectionToggleRow(
-                    title = "Alertas de ligacao",
-                    subtitle = "Recurso planejado para chamadas suspeitas",
-                    checked = false,
-                    enabled = false,
-                    onClick = {}
+                    title = "Proteção de ligações",
+                    subtitle = if (callProtectionEnabled) {
+                        "Ativa. Toque para ver na aba Ligações"
+                    } else {
+                        "Desligada. Toque para ativar na aba Ligações"
+                    },
+                    checked = callProtectionEnabled,
+                    onClick = onOpenCalls
                 )
                 ReinforcedProtectionRow()
                 ProtectionToggleRow(
                     title = "Modo supervisionado",
-                    subtitle = "Planejado para avisar responsavel em golpes graves",
+                    subtitle = "Em breve: avisar o responsável em golpes graves (depende do login)",
                     checked = false,
                     enabled = false,
                     onClick = {}
@@ -866,9 +878,9 @@ fun ProfileScreen(
                 ProtectionToggleRow(
                     title = "Envio para o servidor",
                     subtitle = if (captureEnabled) {
-                        "Mensagens capturadas sao enviadas ao backend para analise."
+                        "Mensagens capturadas são enviadas ao servidor para análise."
                     } else {
-                        "Pausado. Nada e enviado nem salvo na fila offline."
+                        "Pausado. Nada é enviado nem salvo na fila offline."
                     },
                     checked = captureEnabled,
                     onClick = { onCaptureEnabledChange(!captureEnabled) }
@@ -876,7 +888,7 @@ fun ProfileScreen(
                 if (!captureEnabled) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Use ao testar com dados sensiveis no celular pessoal. " +
+                        text = "Use ao testar com dados sensíveis no celular pessoal. " +
                             "Lembre de reativar antes de demonstrar o app.",
                         color = BlessWarning,
                         style = MaterialTheme.typography.bodySmall
@@ -891,50 +903,24 @@ fun ProfileScreen(
 
         item {
             GlassPanel {
-                PanelLabel("SENSIBILIDADE DO ALERTA")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RiskFilterChip(
-                        label = "Padrao",
-                        selected = true,
-                        visual = RiskVisual("Padrao", BlessPrimary, BlessPrimarySoft),
-                        onClick = {}
-                    )
-                    RiskFilterChip(
-                        label = "Alta",
-                        selected = false,
-                        visual = RiskVisual("Alta", BlessMuted, BlessSurfaceElevated),
-                        onClick = {}
-                    )
-                    RiskFilterChip(
-                        label = "Maxima",
-                        selected = false,
-                        visual = RiskVisual("Maxima", BlessMuted, BlessSurfaceElevated),
-                        onClick = {}
-                    )
-                }
-            }
-        }
-
-        item {
-            GlassPanel {
                 PanelLabel("RESUMO DE ATIVIDADE")
-                SummaryRow("Protegido desde", todayLabel())
+                SummaryRow("Protegido desde", protectedSince?.let { dateLabel(it) } ?: "proteção desligada")
                 SummaryRow("Mensagens analisadas", analyzedCount.toString())
                 SummaryRow("Golpes bloqueados", "$blockedCount confirmados", BlessDanger)
                 SummaryRow("Mensagens em atenção", attentionCount.toString(), BlessWarning)
                 SummaryRow(
-                    "Pendencias offline",
+                    "Pendências offline",
                     pendingCount.toString(),
                     if (pendingCount > 0) BlessWarning else BlessSafe
                 )
                 if (vulnerability != null) {
                     SummaryRow(
-                        "Indice de vulnerabilidade",
+                        "Índice de vulnerabilidade",
                         "${formatScore(vulnerability)} - ${riskName(vulnerability)}",
                         riskVisual(vulnerability).color
                     )
                 } else {
-                    SummaryRow("Indice de vulnerabilidade", "em cálculo", BlessMuted)
+                    SummaryRow("Índice de vulnerabilidade", "em cálculo", BlessMuted)
                 }
             }
         }
@@ -943,7 +929,7 @@ fun ProfileScreen(
         if (technicalMode) {
             item {
                 GlassPanel {
-                    PanelLabel("MODO TECNICO")
+                    PanelLabel("MODO TÉCNICO")
                     ProtectionToggleRow(
                         title = "Detalhes técnicos",
                         subtitle = "Mostra como cada algoritmo votou na análise",
@@ -983,6 +969,7 @@ fun ScreenColumn(
 @Composable
 fun BlessTopBar(
     selectedTab: AppTab,
+    protectionActive: Boolean,
     captureEnabled: Boolean,
     pendingCount: Int,
     syncState: MessageRepository.SyncState,
@@ -1037,6 +1024,7 @@ fun BlessTopBar(
         )
         Spacer(modifier = Modifier.width(8.dp))
         ProtectionStatusChip(
+            protectionActive = protectionActive,
             captureEnabled = captureEnabled,
             pendingCount = pendingCount,
             syncState = syncState,
@@ -1050,6 +1038,7 @@ fun BlessTopBar(
 /** Responde "estou protegido agora?" em qualquer aba; toque leva ao Perfil (kill switch). */
 @Composable
 fun ProtectionStatusChip(
+    protectionActive: Boolean,
     captureEnabled: Boolean,
     pendingCount: Int,
     syncState: MessageRepository.SyncState,
@@ -1057,6 +1046,8 @@ fun ProtectionStatusChip(
 ) {
     // Pendencias nao significam "offline": com internet, o servidor pode estar lento ou fora.
     val (label, color) = when {
+        // Sem notificacoes + acessibilidade o app nao captura nada: nunca mostrar "Protegido".
+        !protectionActive -> "Sem proteção" to BlessDanger
         !captureEnabled -> "Pausado" to BlessWarning
         syncState == MessageRepository.SyncState.OFFLINE -> "Sem internet" to BlessMuted
         syncState == MessageRepository.SyncState.SERVER_UNAVAILABLE -> "Indisponível" to BlessDanger
@@ -1707,6 +1698,5 @@ fun compactDate(value: String): String {
     }
 }
 
-fun todayLabel(): String {
-    return SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date())
-}
+fun dateLabel(millis: Long): String =
+    SimpleDateFormat("dd/MM/yyyy", Locale("pt", "BR")).format(Date(millis))

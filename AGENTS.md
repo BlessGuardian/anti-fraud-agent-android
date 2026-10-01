@@ -72,6 +72,8 @@ Responsabilidade: higiene de dados antes de chegar ao backend.
   procurando mensagens, criptografia de ponta a ponta, conectado/desconectado,
   notificacoes genericas de midia como `foto`/`audio`/`video`).
 - Rejeita texto que seja exatamente igual ao nome do remetente.
+- Rejeita resumo de notificacoes, sempre (ex: `4 mensagens de 2 conversas`, `3 novas mensagens`,
+  `5 mensagens não lidas`, `4 messages from 2 chats`). Texto que so comeca com numero passa.
 - Rejeita texto muito curto (< 10 chars) sem sinais de conteudo relevante
   (link, Pix, CPF, banco, senha, codigo, boleto, valor em R$, urgencia financeira).
   A deteccao de sinal relevante e insensivel a acento (ex: `codigo`/`código`,
@@ -309,6 +311,11 @@ A tela principal deve:
 - mostrar indice de vulnerabilidade, mensagens analisadas e golpes bloqueados;
 - mostrar quantidade de pendencias offline;
 - ter aba `Analisar` para envio manual de mensagens suspeitas com `source=manual`;
+- no topo, `ProtectionStatusChip` mostra "Sem proteção" quando notificacoes ou acessibilidade estao
+  desligadas (nada e capturado), antes de "Pausado"/"Protegido";
+- no Perfil, nao manter controles sem funcao: "Proteção de ligações" reflete o estado real e abre a
+  aba Ligações; "Protegido desde" vem de `SettingsRepository.protectedSinceMillis()` (gravado ao
+  ligar a protecao continua, apagado ao desligar);
 - consultar historico oficial via `GET /logs?device_id=...`;
 - nao usar Room como fonte do historico.
 
