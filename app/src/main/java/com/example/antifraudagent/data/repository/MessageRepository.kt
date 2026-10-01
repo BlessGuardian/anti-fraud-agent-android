@@ -30,7 +30,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.IOException
 
 class MessageRepository(context: Context) {
@@ -52,6 +54,18 @@ class MessageRepository(context: Context) {
         // Compartilhados entre as instancias (Activity, servicos de captura, SmsReceiver) do
         // mesmo processo: garante um unico envio da fila por vez, evitando registros duplicados.
         private val pendingQueueMutex = Mutex()
+
+        /**
+         * Marcador desta instalacao em noBackupFilesDir (o Android nunca inclui essa pasta no backup).
+         * Sem ele, o app acabou de ser instalado ou restaurado de um backup: a fila PENDING que veio
+         * junto com o banco ja foi (ou deveria ter sido) enviada pelo aparelho antigo e, reenviada,
+         * duplica registros no DynamoDB. Ver data_extraction_rules.xml.
+         */
+        private const val INSTALL_MARKER = "install_marker"
+
+        @Volatile
+        private var restoreChecked = false
+        private val restoreCheckMutex = Mutex()
 
         /** A fila roda no escopo do processo: sair da tela nao pode cancelar o envio. */
         private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -187,6 +201,8 @@ class MessageRepository(context: Context) {
     fun drainQueueInBackground(): Job = queueScope.launch { processPendingMessages() }
 
     suspend fun processPendingMessages() = withContext(Dispatchers.IO) {
+        // Antes do kill switch: a fila restaurada e descartada mesmo com o envio pausado.
+        discardRestoredQueueIfNeeded()
         if (!settings.isCaptureEnabled()) {
             Log.d(TAG, "Envio pausado pelo usuario; fila PENDING nao sera processada")
             return@withContext
@@ -202,6 +218,7 @@ class MessageRepository(context: Context) {
         // Se outra chamada ja esta enviando a fila, nao envia de novo em paralelo.
         if (!pendingQueueMutex.tryLock()) return
         try {
+            discardRestoredQueueIfNeeded()
             val pendingMessages = dao.getAllPending()
             if (pendingMessages.isEmpty()) {
                 _syncState.value = SyncState.IDLE
@@ -285,6 +302,7 @@ class MessageRepository(context: Context) {
     }
 
     private suspend fun enqueuePending(message: AnalyzedMessage) {
+        discardRestoredQueueIfNeeded()
         val pendingCount = dao.countPending()
         if (pendingCount >= MAX_PENDING_MESSAGES) {
             val lowestScore = dao.getPendingWithLowestScore()
@@ -301,6 +319,21 @@ class MessageRepository(context: Context) {
 
         val id = dao.insert(message.copy(status = MessageStatus.PENDING))
         Log.d(TAG, "Mensagem salva como PENDING id=$id | source=${message.source}")
+    }
+
+    /** Descarta a fila PENDING restaurada de backup, uma vez por instalacao. */
+    private suspend fun discardRestoredQueueIfNeeded() {
+        if (restoreChecked) return
+        restoreCheckMutex.withLock {
+            if (restoreChecked) return
+            val marker = File(appContext.noBackupFilesDir, INSTALL_MARKER)
+            if (!marker.exists()) {
+                val discarded = dao.deleteAllPending()
+                Log.i(TAG, "Primeira execucao desta instalacao: $discarded PENDING restaurados descartados")
+                marker.createNewFile()
+            }
+            restoreChecked = true
+        }
     }
 
     private fun passesMinimumQuality(content: String, layer1Score: Float): Boolean {
