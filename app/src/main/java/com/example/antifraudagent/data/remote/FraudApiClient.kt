@@ -201,7 +201,9 @@ data class FraudAnalysisResult(
     val reasoning: String = "",
     val indicators: List<String> = emptyList(),
     val hybrid: HybridVerdict? = null
-)
+) {
+    val riskLevel: RiskLevel get() = RiskLevel.of(isFraud, hybrid)
+}
 
 data class RemoteFraudLog(
     val id: String,
@@ -215,7 +217,31 @@ data class RemoteFraudLog(
 ) {
     /** O backend hibrido grava o veredito estruturado dentro de `explanation`. */
     val hybrid: HybridVerdict? get() = HybridVerdict.parse(explanation)
+
+    val riskLevel: RiskLevel get() = RiskLevel.of(isFraud, hybrid)
 }
+
+/**
+ * Nivel de risco exibido ao usuario. O backend hibrido grava is_fraud=true tanto para
+ * FRAUDE (LLM e modelo local concordam) quanto para AVISO (so um deles acusou); por isso
+ * o nivel vem do status_final, e is_fraud so decide quando nao ha veredito hibrido.
+ */
+enum class RiskLevel {
+    SAFE, ATTENTION, HIGH;
+
+    companion object {
+        fun of(isFraud: Boolean, hybrid: HybridVerdict?): RiskLevel =
+            when (hybrid?.status?.trim()?.lowercase()) {
+                "fraude" -> HIGH
+                "aviso" -> ATTENTION
+                "seguro" -> SAFE
+                else -> if (isFraud) HIGH else SAFE
+            }
+    }
+}
+
+/** O backend hibrido ainda grava score=0; zero significa "sem pontuacao", nao "0% de risco". */
+fun Float?.meaningfulScore(): Float? = this?.takeIf { it > 0f }
 
 /**
  * Decisao do backend hibrido. Formato gravado em `explanation`:

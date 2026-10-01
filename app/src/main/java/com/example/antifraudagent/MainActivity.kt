@@ -96,6 +96,11 @@ import com.example.antifraudagent.calls.CallProtectionState
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
+import android.widget.Toast
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.platform.LocalContext
+import com.example.antifraudagent.data.remote.RiskLevel
+import com.example.antifraudagent.data.remote.meaningfulScore
 import com.example.antifraudagent.services.FraudAccessibilityService
 import com.example.antifraudagent.services.MessageListenerService
 import com.example.antifraudagent.ui.theme.AntiFraudAgentTheme
@@ -162,6 +167,7 @@ class MainActivity : ComponentActivity() {
                 val settings = remember { SettingsRepository.getInstance(applicationContext) }
                 val captureEnabled by settings.captureEnabled.collectAsState()
                 val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
+                val technicalMode by settings.technicalMode.collectAsState()
                 val liveCall by CallProtectionState.state.collectAsState()
                 val scope = rememberCoroutineScope()
                 var selectedTab by remember { mutableStateOf(AppTab.Home) }
@@ -275,6 +281,8 @@ class MainActivity : ComponentActivity() {
                     onRequestNotification = { openNotificationListenerSettings() },
                     onRequestAccessibility = { openAccessibilitySettings() },
                     onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
+                    technicalMode = technicalMode,
+                    onTechnicalModeChange = { settings.setTechnicalMode(it) },
                     callRequirements = CallRequirements(
                         protectionEnabled = callProtectionEnabled,
                         permissionsGranted = callPermissionsGranted,
@@ -406,7 +414,7 @@ enum class AppTab(val label: String, val title: String, val icon: ImageVector) {
 enum class RiskFilter(val label: String) {
     All("Todos"),
     High("Alto risco"),
-    Medium("Medio"),
+    Medium("Atenção"),
     Safe("Seguro")
 }
 
@@ -440,6 +448,8 @@ fun BlessGuardianApp(
     onRequestNotification: () -> Unit,
     onRequestAccessibility: () -> Unit,
     onCaptureEnabledChange: (Boolean) -> Unit,
+    technicalMode: Boolean,
+    onTechnicalModeChange: (Boolean) -> Unit,
     callRequirements: CallRequirements,
     liveCall: CallProtectionSnapshot,
     callTranscripts: List<CallTranscript>,
@@ -450,10 +460,14 @@ fun BlessGuardianApp(
     onRefreshCallTranscripts: () -> Unit
 ) {
     var openDetail by remember { mutableStateOf<AnalysisDetail?>(null) }
+    CompositionLocalProvider(
+        LocalOpenDetail provides { openDetail = it },
+        LocalTechnicalMode provides technicalMode
+    ) {
+    // Dentro do provider: a folha precisa ler LocalTechnicalMode.
     openDetail?.let { detail ->
         AnalysisDetailSheet(detail = detail, onDismiss = { openDetail = null })
     }
-    CompositionLocalProvider(LocalOpenDetail provides { openDetail = it }) {
     Scaffold(
         containerColor = BlessBackground,
         topBar = {
@@ -462,7 +476,8 @@ fun BlessGuardianApp(
                 captureEnabled = captureEnabled,
                 pendingCount = pendingCount,
                 syncState = syncState,
-                onOpenProfile = { onTabSelected(AppTab.Profile) }
+                onOpenProfile = { onTabSelected(AppTab.Profile) },
+                onLogoTapped7Times = { onTechnicalModeChange(!technicalMode) }
             )
         },
         bottomBar = {
@@ -523,7 +538,9 @@ fun BlessGuardianApp(
                 logs = logs,
                 onRequestNotification = onRequestNotification,
                 onRequestAccessibility = onRequestAccessibility,
-                onCaptureEnabledChange = onCaptureEnabledChange
+                onCaptureEnabledChange = onCaptureEnabledChange,
+                technicalMode = technicalMode,
+                onTechnicalModeChange = onTechnicalModeChange
             )
         }
     }
@@ -570,17 +587,12 @@ fun HomeScreen(
     onRefresh: () -> Unit
 ) {
     val analyzedCount = logs.size
-    val blockedCount = logs.count { it.isFraud }
-    val vulnerability = logs.takeIf { it.isNotEmpty() }
-        ?.map { it.riskScore }
-        ?.average()
-        ?.toFloat()
-        ?: 0f
-    val recentAlerts = logs.filter { it.isFraud }.take(3)
+    val blockedCount = logs.count { it.riskLevel == RiskLevel.HIGH }
+    val recentAlerts = logs.filter { it.riskLevel != RiskLevel.SAFE }.take(3)
 
     ScreenColumn(padding = padding) {
         item {
-            VulnerabilityCard(score = vulnerability)
+            VulnerabilityCard(score = vulnerabilityScore(logs), currentLevel = currentRiskLevel(logs))
         }
 
         item {
@@ -640,9 +652,9 @@ fun HistoryScreen(
     val filteredLogs = logs.filter { log ->
         when (selectedFilter) {
             RiskFilter.All -> true
-            RiskFilter.High -> log.isFraud || log.riskScore >= 0.75f
-            RiskFilter.Medium -> !log.isFraud && log.riskScore in 0.4f..<0.75f
-            RiskFilter.Safe -> !log.isFraud && log.riskScore < 0.4f
+            RiskFilter.High -> log.riskLevel == RiskLevel.HIGH
+            RiskFilter.Medium -> log.riskLevel == RiskLevel.ATTENTION
+            RiskFilter.Safe -> log.riskLevel == RiskLevel.SAFE
         }
     }
 
@@ -655,7 +667,7 @@ fun HistoryScreen(
                         selected = selectedFilter == filter,
                         visual = when (filter) {
                             RiskFilter.High -> RiskVisual("Alto risco", BlessDanger, BlessDangerSoft)
-                            RiskFilter.Medium -> RiskVisual("Medio risco", BlessWarning, BlessWarningSoft)
+                            RiskFilter.Medium -> RiskVisual("Atenção", BlessWarning, BlessWarningSoft)
                             RiskFilter.Safe -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
                             RiskFilter.All -> RiskVisual("Todos", BlessPrimary, BlessPrimarySoft)
                         },
@@ -805,15 +817,14 @@ fun ProfileScreen(
     logs: List<RemoteFraudLog>,
     onRequestNotification: () -> Unit,
     onRequestAccessibility: () -> Unit,
-    onCaptureEnabledChange: (Boolean) -> Unit
+    onCaptureEnabledChange: (Boolean) -> Unit,
+    technicalMode: Boolean,
+    onTechnicalModeChange: (Boolean) -> Unit
 ) {
     val analyzedCount = logs.size
-    val blockedCount = logs.count { it.isFraud }
-    val vulnerability = logs.takeIf { it.isNotEmpty() }
-        ?.map { it.riskScore }
-        ?.average()
-        ?.toFloat()
-        ?: 0f
+    val blockedCount = logs.count { it.riskLevel == RiskLevel.HIGH }
+    val attentionCount = logs.count { it.riskLevel == RiskLevel.ATTENTION }
+    val vulnerability = vulnerabilityScore(logs)
 
     ScreenColumn(padding = padding) {
         item {
@@ -905,16 +916,36 @@ fun ProfileScreen(
                 SummaryRow("Protegido desde", todayLabel())
                 SummaryRow("Mensagens analisadas", analyzedCount.toString())
                 SummaryRow("Golpes bloqueados", "$blockedCount confirmados", BlessDanger)
+                SummaryRow("Mensagens em atenção", attentionCount.toString(), BlessWarning)
                 SummaryRow(
                     "Pendencias offline",
                     pendingCount.toString(),
                     if (pendingCount > 0) BlessWarning else BlessSafe
                 )
-                SummaryRow(
-                    "Indice de vulnerabilidade",
-                    "${formatScore(vulnerability)} - ${riskName(vulnerability)}",
-                    riskVisual(vulnerability).color
-                )
+                if (vulnerability != null) {
+                    SummaryRow(
+                        "Indice de vulnerabilidade",
+                        "${formatScore(vulnerability)} - ${riskName(vulnerability)}",
+                        riskVisual(vulnerability).color
+                    )
+                } else {
+                    SummaryRow("Indice de vulnerabilidade", "em cálculo", BlessMuted)
+                }
+            }
+        }
+
+        // So aparece depois de liberado pelos toques no logo; desligar aqui esconde de novo.
+        if (technicalMode) {
+            item {
+                GlassPanel {
+                    PanelLabel("MODO TECNICO")
+                    ProtectionToggleRow(
+                        title = "Detalhes técnicos",
+                        subtitle = "Mostra como cada algoritmo votou na análise",
+                        checked = true,
+                        onClick = { onTechnicalModeChange(false) }
+                    )
+                }
             }
         }
     }
@@ -950,8 +981,13 @@ fun BlessTopBar(
     captureEnabled: Boolean,
     pendingCount: Int,
     syncState: MessageRepository.SyncState,
-    onOpenProfile: () -> Unit
+    onOpenProfile: () -> Unit,
+    onLogoTapped7Times: () -> Unit
 ) {
+    val context = LocalContext.current
+    val technicalMode = LocalTechnicalMode.current
+    var logoTaps by remember { mutableStateOf(0) }
+    var lastLogoTap by remember { mutableStateOf(0L) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -963,7 +999,26 @@ fun BlessTopBar(
         Image(
             painter = painterResource(id = R.drawable.blessguardian_logo),
             contentDescription = null,
-            modifier = Modifier.height(30.dp)
+            modifier = Modifier
+                .height(30.dp)
+                // Liga/desliga o modo tecnico com 7 toques seguidos, como as opcoes de desenvolvedor.
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    val now = System.currentTimeMillis()
+                    logoTaps = if (now - lastLogoTap > LOGO_TAP_WINDOW_MS) 1 else logoTaps + 1
+                    lastLogoTap = now
+                    if (logoTaps >= 7) {
+                        logoTaps = 0
+                        onLogoTapped7Times()
+                        Toast.makeText(
+                            context,
+                            if (technicalMode) "Modo técnico desativado" else "Modo técnico ativado",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
         )
         Spacer(modifier = Modifier.width(10.dp))
         Text(
@@ -1068,7 +1123,9 @@ fun PageIntro(text: String) {
 }
 
 @Composable
-fun VulnerabilityCard(score: Float) {
+fun VulnerabilityCard(score: Float?, currentLevel: RiskLevel) {
+    // Sem pontuacao do servidor, o arco fica vazio e o risco atual vem dos vereditos recentes.
+    val currentVisual = levelVisual(currentLevel, score)
     GlassPanel {
         Text(
             text = "INDICE DE VULNERABILIDADE",
@@ -1082,15 +1139,15 @@ fun VulnerabilityCard(score: Float) {
                 .height(86.dp),
             contentAlignment = Alignment.Center
         ) {
-            GaugeArc(score = score)
+            GaugeArc(score = score ?: 0f)
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = formatScore(score),
+                    text = score?.let { formatScore(it) } ?: "—",
                     style = MaterialTheme.typography.titleLarge,
                     color = BlessPrimary
                 )
                 Text(
-                    text = riskName(score),
+                    text = score?.let { riskName(it) } ?: "em cálculo",
                     style = MaterialTheme.typography.bodySmall,
                     color = BlessMuted
                 )
@@ -1100,9 +1157,9 @@ fun VulnerabilityCard(score: Float) {
         // Status de conexao/fila fica no ProtectionStatusChip do topo; aqui so o risco.
         StatusPill(
             modifier = Modifier.fillMaxWidth(),
-            label = riskName(score),
+            label = currentVisual.label.lowercase(),
             value = "risco atual",
-            visual = riskVisual(score)
+            visual = currentVisual
         )
     }
 }
@@ -1246,7 +1303,13 @@ fun HistoryLogCard(log: RemoteFraudLog) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${sourceLabel(log.source)} · ${if (log.isFraud) "golpe detectado" else "analisado"}",
+                    text = "${sourceLabel(log.source)} · ${
+                        when (log.riskLevel) {
+                            RiskLevel.HIGH -> "golpe detectado"
+                            RiskLevel.ATTENTION -> "atenção"
+                            RiskLevel.SAFE -> "analisado"
+                        }
+                    }",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -1291,7 +1354,7 @@ fun HistoryLogCard(log: RemoteFraudLog) {
 
 @Composable
 fun ManualResultCard(result: FraudAnalysisResult, analyzedText: String, analyzedAt: Long) {
-    val visual = if (result.isFraud) RiskVisual("Alto risco", BlessDanger, BlessDangerSoft) else riskVisual(result.score)
+    val visual = levelVisual(result.riskLevel, result.score)
     val openDetail = LocalOpenDetail.current
     GlassPanel(onClick = { openDetail(result.toDetail(analyzedText, analyzedAt)) }) {
         Row(
@@ -1301,7 +1364,11 @@ fun ManualResultCard(result: FraudAnalysisResult, analyzedText: String, analyzed
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (result.isFraud) "Possível golpe detectado" else "Mensagem com baixo risco",
+                    text = when (result.riskLevel) {
+                        RiskLevel.HIGH -> "Alta probabilidade de golpe"
+                        RiskLevel.ATTENTION -> "Atenção: pode ser golpe"
+                        RiskLevel.SAFE -> "Mensagem com baixo risco"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -1566,7 +1633,8 @@ fun ScorePill(score: Float, visual: RiskVisual) {
         border = androidx.compose.foundation.BorderStroke(1.dp, visual.color.copy(alpha = 0.65f))
     ) {
         Text(
-            text = formatScore(score),
+            // Sem pontuacao do servidor (score 0), mostra o veredito em vez de "0.00".
+            text = score.meaningfulScore()?.let { formatScore(it) } ?: visual.label.lowercase(),
             color = visual.color,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             fontWeight = FontWeight.Bold
@@ -1582,9 +1650,37 @@ fun riskVisual(score: Float): RiskVisual = when {
 
 fun riskName(score: Float): String = riskVisual(score).label.lowercase()
 
-/** Fraude confirmada pelo servidor e sempre vermelho, mesmo com score baixo (hibrido AVISO). */
-fun logVisual(log: RemoteFraudLog): RiskVisual =
-    if (log.isFraud) RiskVisual("Alto risco", BlessDanger, BlessDangerSoft) else riskVisual(log.riskScore)
+fun logVisual(log: RemoteFraudLog): RiskVisual = levelVisual(log.riskLevel, log.riskScore)
+
+/** Alto risco so quando os dois algoritmos concordam; AVISO (so um acusou) e atencao. */
+fun levelVisual(level: RiskLevel, score: Float?): RiskVisual = when (level) {
+    RiskLevel.HIGH -> RiskVisual("Alto risco", BlessDanger, BlessDangerSoft)
+    RiskLevel.ATTENTION -> RiskVisual("Atenção", BlessWarning, BlessWarningSoft)
+    RiskLevel.SAFE -> score.meaningfulScore()?.let { riskVisual(it) } ?: RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
+}
+
+/** Media de risk_score; null enquanto o servidor nao manda pontuacao (todos os scores zerados). */
+fun vulnerabilityScore(logs: List<RemoteFraudLog>): Float? =
+    logs.takeIf { list -> list.any { it.riskScore.meaningfulScore() != null } }
+        ?.map { it.riskScore }
+        ?.average()
+        ?.toFloat()
+
+/** Pior veredito dos ultimos 7 dias. */
+fun currentRiskLevel(logs: List<RemoteFraudLog>): RiskLevel {
+    val since = java.time.OffsetDateTime.now().minusDays(7)
+    return logs
+        .filter { log ->
+            try {
+                java.time.OffsetDateTime.parse(log.detectedAt).isAfter(since)
+            } catch (_: Exception) {
+                false
+            }
+        }
+        .maxOfOrNull { it.riskLevel } ?: RiskLevel.SAFE
+}
+
+private const val LOGO_TAP_WINDOW_MS = 1_500L
 
 @Composable
 fun DetailsHint() {

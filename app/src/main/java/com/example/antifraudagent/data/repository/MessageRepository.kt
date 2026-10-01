@@ -207,6 +207,12 @@ class MessageRepository(context: Context) {
 
             _syncState.value = SyncState.SYNCING
             for (pending in pendingMessages) {
+                // O kill switch pode ser desligado com a fila ja em andamento: para no proximo item.
+                if (!settings.isCaptureEnabled()) {
+                    Log.d(TAG, "Envio pausado pelo usuario; fila PENDING interrompida")
+                    _syncState.value = SyncState.IDLE
+                    return
+                }
                 try {
                     analyzeAndClearPending(pending)
                 } catch (e: FraudApiHttpException) {
