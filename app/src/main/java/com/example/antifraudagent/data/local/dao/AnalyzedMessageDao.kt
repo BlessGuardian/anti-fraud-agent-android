@@ -28,4 +28,7 @@ interface AnalyzedMessageDao {
 
     @Delete
     suspend fun delete(message: AnalyzedMessage)
+
+    @Query("DELETE FROM analyzed_messages WHERE status = 'PENDING'")
+    suspend fun deleteAllPending(): Int
 }

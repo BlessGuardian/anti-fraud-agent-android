@@ -43,6 +43,12 @@ Regras da fila `PENDING` (`MessageRepository`):
 - Falha transitoria (timeout, rede, HTTP 5xx/408/429) interrompe a fila; ela volta no proximo gatilho (abrir/atualizar o app, rede disponivel, nova captura).
 - HTTP 4xx definitivo (`FraudApiHttpException.isPermanent`) remove o item da fila, para ele nao travar as demais pendencias.
 - O kill switch e conferido a cada item: desligar o envio com a fila em andamento interrompe no proximo item.
+- Backup do Android (`data_extraction_rules.xml`): sharedpref e database vao para o backup (device_id,
+  Perfil, contatos confiaveis, ligacoes). A fila PENDING restaurada NAO e reenviada: na primeira
+  execucao de cada instalacao (marcador `install_marker` em `noBackupFilesDir`, fora do backup) o
+  `MessageRepository.discardRestoredQueueIfNeeded` apaga os PENDING. Antes disso, reinstalar o app
+  reenviava a fila antiga e duplicava registros no DynamoDB. Efeito colateral: ao atualizar para a
+  versao com o marcador, a fila PENDING existente e descartada uma vez.
 - `MessageRepository.syncState` (`IDLE`, `SYNCING`, `SERVER_UNAVAILABLE`, `OFFLINE`) alimenta o card da Inicio; pendencias com internet NAO devem aparecer como "offline".
 - A tela carrega `GET /logs` primeiro e processa a fila em paralelo; o contador vem de `observePendingCount()` (Flow do Room).
 
