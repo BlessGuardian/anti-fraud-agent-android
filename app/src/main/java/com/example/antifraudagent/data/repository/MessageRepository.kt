@@ -14,7 +14,9 @@ import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.FraudApiHttpException
 import com.example.antifraudagent.data.remote.RemoteFraudLog
+import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.settings.SettingsRepository
+import com.example.antifraudagent.data.trusted.TrustedContactRepository
 import com.example.antifraudagent.calls.SuspiciousMessageAlert
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,7 @@ class MessageRepository(context: Context) {
     private val apiClient = FraudApiClient()
     private val deviceId = DeviceIdentityProvider.getDeviceId(appContext)
     private val settings = SettingsRepository.getInstance(appContext)
+    private val trustedContacts = TrustedContactRepository(appContext)
 
     companion object {
         private const val TAG = "MessageRepository"
@@ -255,13 +258,20 @@ class MessageRepository(context: Context) {
         }
 
         if (result.isFraud) {
+            // Contato confiavel continua analisado, mas so alerta em alto risco (conta clonada).
+            val fromTrusted = trustedContacts.isTrusted(message.sender)
+            if (fromTrusted && result.riskLevel != RiskLevel.HIGH) {
+                Log.d(TAG, "Atencao de contato confiavel; alerta suprimido")
+                return
+            }
             Log.d(TAG, "Fraude detectada pelo servidor | score=${result.score} | dbSynced=${result.dbSynced}")
             SuspiciousMessageAlert.show(
                 context = appContext,
                 result = result,
                 content = message.content,
                 sourceName = message.source.name,
-                capturedAt = message.capturedAt
+                capturedAt = message.capturedAt,
+                fromTrustedContact = fromTrusted
             )
         } else {
             Log.d(TAG, "Servidor descartou mensagem online")

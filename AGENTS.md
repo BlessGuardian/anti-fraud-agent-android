@@ -241,6 +241,23 @@ Resposta (status 200):
 
 `{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
 
+## Contatos confiaveis
+
+Lista local (Room v4, tabela `trusted_contacts`; `TrustedContactRepository`). Nunca vai ao backend.
+
+- Mensagem de contato confiavel continua sendo enviada ao `/detect`, mas so gera alerta em
+  `RiskLevel.HIGH` (os dois algoritmos concordam), com aviso de possivel conta clonada.
+  `ATTENTION` de contato confiavel nao alerta (checagem em `MessageRepository.analyzeAndPersist`).
+- Comparacao (`TrustedContactRepository.matches`): notificacao de WhatsApp/Telegram/Instagram traz
+  o NOME (comparado sem acento/maiusculas); SMS traz o NUMERO (ultimos 8 digitos, ignorando +55,
+  DDD e o 9 extra). Por isso cada contato guarda nome e numero.
+- Captura pela acessibilidade (usuario dentro da conversa) nao conhece o remetente: nao e filtrada.
+- Ligacoes nao usam a lista (o alerta de ligacao ja e so em risco alto).
+- "Escolher da agenda" usa `ACTION_PICK` em `Phone.CONTENT_URI`: o app recebe acesso so ao numero
+  escolhido. NAO pedir `READ_CONTACTS`.
+- Sincronizacao com backend fica para depois do login (responsavel gerenciar a lista); entra no
+  repositorio sem mudar telas nem captura.
+
 ## Room / SQLite
 
 Room nao e historico oficial.

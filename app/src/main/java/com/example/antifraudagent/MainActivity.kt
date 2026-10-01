@@ -885,6 +885,10 @@ fun ProfileScreen(
         }
 
         item {
+            TrustedContactsPanel()
+        }
+
+        item {
             GlassPanel {
                 PanelLabel("SENSIBILIDADE DO ALERTA")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
