@@ -86,6 +86,48 @@ class FraudApiClient(
         }
     }
 
+    /** POST /register: cria a conta ligada a este aparelho (user_id = uuid5 do device_id). */
+    suspend fun register(deviceId: String, email: String, password: String) {
+        postJson(
+            "/register",
+            JSONObject().put("device_id", deviceId).put("email", email).put("password", password)
+        )
+    }
+
+    /** POST /login: devolve o token JWT, o user_id e o papel (default/admin). */
+    suspend fun login(email: String, password: String): LoginResult {
+        val root = JSONObject(postJson("/login", JSONObject().put("email", email).put("password", password)))
+        return LoginResult(
+            accessToken = root.getString("access_token"),
+            userId = root.optStringOrNull("user_id").orEmpty(),
+            role = root.optStringOrNull("role") ?: "default"
+        )
+    }
+
+    private suspend fun postJson(path: String, body: JSONObject): String = withContext(Dispatchers.IO) {
+        val connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val responseCode = connection.responseCode
+            val responseBody = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            }
+            if (responseCode !in 200..299) throw FraudApiHttpException(responseCode, responseBody)
+            responseBody
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     private fun parseResponse(responseBody: String): FraudAnalysisResult {
         val root = JSONObject(responseBody)
         val analysis = root.optJSONObject("analise") ?: root
@@ -182,11 +224,26 @@ class FraudApiClient(
  */
 class FraudApiHttpException(
     val code: Int,
-    body: String
+    val body: String
 ) : IOException("FastAPI returned HTTP $code: $body") {
     val isPermanent: Boolean
         get() = code in 400..499 && code != 408 && code != 429
+
+    /** `detail` do FastAPI: texto (HTTPException) ou lista de erros de validacao (422). */
+    val detail: String?
+        get() = try {
+            val root = JSONObject(body)
+            root.optJSONArray("detail")?.let { list ->
+                (0 until list.length()).mapNotNull { list.optJSONObject(it)?.optStringOrNull("msg") }
+                    .joinToString("; ")
+                    .takeIf { it.isNotBlank() }
+            } ?: root.optStringOrNull("detail")
+        } catch (_: Exception) {
+            null
+        }
 }
+
+data class LoginResult(val accessToken: String, val userId: String, val role: String)
 
 data class FraudAnalysisResult(
     val isFraud: Boolean,

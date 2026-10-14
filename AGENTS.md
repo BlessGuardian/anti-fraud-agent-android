@@ -245,6 +245,26 @@ Resposta (status 200):
 }
 ```
 
+### POST /register e POST /login (conta)
+
+```json
+POST /register  {"device_id": "...", "email": "a@b.com", "password": "..."}
+-> 201 {"status": "success", "message": "...", "user_id": "uuid5-do-device_id"}
+-> 400 {"detail": "..."}            422 = e-mail invalido
+
+POST /login     {"email": "a@b.com", "password": "..."}
+-> 200 {"access_token": "<JWT>", "token_type": "bearer", "user_id": "...", "role": "default|admin"}
+-> 401 {"detail": "E-mail ou senha incorretos"}
+```
+
+- Login e opcional: sem conta o app segue pelo `device_id`. O `user_id` da conta e o mesmo uuid5 do
+  `device_id` usado nos logs, entao a conta fica ligada ao historico deste celular.
+- `AuthRepository` guarda e-mail, `user_id`, papel e token em `auth_session.xml`, FORA do backup
+  (`data_extraction_rules.xml`). `register` cria a conta e ja faz login.
+- Os demais endpoints ainda nao exigem o token (out/2026); ele fica guardado para quando exigirem.
+- Papel `admin` liga o modo tecnico (comite de algoritmos) automaticamente. Os 7 toques no logo so
+  funcionam no build debug.
+
 ### GET /health
 
 `{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
@@ -343,8 +363,9 @@ Nao usar `isFraud` direto na UI: o backend grava `is_fraud=true` tambem para `av
 
 O bloco "Como foi decidido" (votos do LLM e do modelo local) so aparece com o modo tecnico ligado
 (`SettingsRepository.technicalMode`, exposto via `LocalTechnicalMode`). Desligado por padrao.
-Liga/desliga com 7 toques seguidos no logo do topo; ligado, aparece o painel "Modo tecnico" no Perfil
-para desligar. Solucao provisoria ate existir login: depois, so administrador.
+Conta com papel `admin` ve o comite automaticamente. No build debug, 7 toques seguidos no logo
+ligam/desligam o modo (demonstracao); ligado, aparece o painel "Modo tecnico" no Perfil. No build
+de release os toques nao fazem nada.
 
 ## Analise manual
 
