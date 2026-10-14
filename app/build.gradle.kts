@@ -62,6 +62,11 @@ dependencies {
     // Coroutines — operações assíncronas sem travar a UI
     implementation(libs.kotlinx.coroutines.android)
 
+    // Vinculo com o responsavel (modo idoso/crianca)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.zxing.core)
+    implementation(libs.play.services.code.scanner)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
