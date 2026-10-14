@@ -96,6 +96,8 @@ import com.example.antifraudagent.calls.CallProtectionState
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
+import com.example.antifraudagent.data.auth.AuthSession
+import com.example.antifraudagent.data.auth.AuthRepository
 import android.widget.Toast
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.platform.LocalContext
@@ -461,10 +463,21 @@ fun BlessGuardianApp(
     onRefreshCallTranscripts: () -> Unit
 ) {
     var openDetail by remember { mutableStateOf<AnalysisDetail?>(null) }
+    var showAccount by remember { mutableStateOf(false) }
+    val authContext = LocalContext.current
+    val session by remember { AuthRepository.getInstance(authContext).session }.collectAsState()
+    // Regra do orientador: o comite de algoritmos e do administrador. Os 7 toques no logo
+    // (technicalMode) so valem no build de desenvolvimento, para demonstracao.
+    val devTechnicalMode = BuildConfig.DEBUG && technicalMode
+    val effectiveTechnicalMode = session?.isAdmin == true || devTechnicalMode
     CompositionLocalProvider(
         LocalOpenDetail provides { openDetail = it },
-        LocalTechnicalMode provides technicalMode
+        LocalTechnicalMode provides effectiveTechnicalMode,
+        LocalOpenAccount provides { showAccount = true }
     ) {
+    if (showAccount) {
+        AccountSheet(onDismiss = { showAccount = false })
+    }
     // Dentro do provider: a folha precisa ler LocalTechnicalMode.
     openDetail?.let { detail ->
         AnalysisDetailSheet(detail = detail, onDismiss = { openDetail = null })
@@ -479,7 +492,9 @@ fun BlessGuardianApp(
                 pendingCount = pendingCount,
                 syncState = syncState,
                 onOpenProfile = { onTabSelected(AppTab.Profile) },
-                onLogoTapped7Times = { onTechnicalModeChange(!technicalMode) }
+                onLogoTapped7Times = { onTechnicalModeChange(!technicalMode) },
+                session = session,
+                devTechnicalMode = devTechnicalMode
             )
         },
         bottomBar = {
@@ -541,7 +556,7 @@ fun BlessGuardianApp(
                 onRequestNotification = onRequestNotification,
                 onRequestAccessibility = onRequestAccessibility,
                 onCaptureEnabledChange = onCaptureEnabledChange,
-                technicalMode = technicalMode,
+                technicalMode = devTechnicalMode,
                 onTechnicalModeChange = onTechnicalModeChange,
                 onOpenCalls = { onTabSelected(AppTab.Calls) }
             )
@@ -840,6 +855,10 @@ fun ProfileScreen(
         }
 
         item {
+            AccountPanel()
+        }
+
+        item {
             GlassPanel {
                 PanelLabel("MODO DE PROTEÇÃO")
                 ProtectionToggleRow(
@@ -974,10 +993,12 @@ fun BlessTopBar(
     pendingCount: Int,
     syncState: MessageRepository.SyncState,
     onOpenProfile: () -> Unit,
-    onLogoTapped7Times: () -> Unit
+    onLogoTapped7Times: () -> Unit,
+    session: AuthSession?,
+    devTechnicalMode: Boolean
 ) {
     val context = LocalContext.current
-    val technicalMode = LocalTechnicalMode.current
+    val openAccount = LocalOpenAccount.current
     var logoTaps by remember { mutableStateOf(0) }
     var lastLogoTap by remember { mutableStateOf(0L) }
     Row(
@@ -998,6 +1019,8 @@ fun BlessTopBar(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
                 ) {
+                    // So no build de desenvolvimento; no app publicado o comite e do administrador.
+                    if (!BuildConfig.DEBUG) return@clickable
                     val now = System.currentTimeMillis()
                     logoTaps = if (now - lastLogoTap > LOGO_TAP_WINDOW_MS) 1 else logoTaps + 1
                     lastLogoTap = now
@@ -1006,7 +1029,7 @@ fun BlessTopBar(
                         onLogoTapped7Times()
                         Toast.makeText(
                             context,
-                            if (technicalMode) "Modo técnico desativado" else "Modo técnico ativado",
+                            if (devTechnicalMode) "Modo técnico desativado" else "Modo técnico ativado",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -1031,7 +1054,7 @@ fun BlessTopBar(
             onClick = onOpenProfile
         )
         Spacer(modifier = Modifier.width(10.dp))
-        AccountAvatarPlaceholder(onClick = onOpenProfile)
+        AccountAvatar(session = session, onClick = openAccount)
     }
 }
 
@@ -1081,30 +1104,6 @@ fun ProtectionStatusChip(
                 maxLines = 1
             )
         }
-    }
-}
-
-/**
- * ILUSTRATIVO: ainda nao existe login (o usuario e identificado pelo device_id).
- * Substituir pela foto/iniciais do usuario quando a autenticacao do backend estiver pronta.
- */
-@Composable
-fun AccountAvatarPlaceholder(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(CircleShape)
-            .background(BlessSurfaceElevated)
-            .border(1.dp, BlessBorder, CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Person,
-            contentDescription = "Conta",
-            tint = BlessMuted,
-            modifier = Modifier.size(20.dp)
-        )
     }
 }
 
