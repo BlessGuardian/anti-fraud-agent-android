@@ -13,7 +13,8 @@ Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens s
 - Minimum SDK: API 31
 - Target SDK: API 36
 - Package: `com.example.antifraudagent`
-- Banco local: Room/SQLite apenas como fila offline
+- Banco local: Room/SQLite (v4) para fila offline, historico de ligacoes e contatos confiaveis;
+  o historico oficial de mensagens e o DynamoDB
 - Branch de referencia atual: `main`
 
 ## Arquitetura atual
@@ -52,7 +53,15 @@ Regras da fila `PENDING` (`MessageRepository`):
 - `MessageRepository.syncState` (`IDLE`, `SYNCING`, `SERVER_UNAVAILABLE`, `OFFLINE`) alimenta o card da Inicio; pendencias com internet NAO devem aparecer como "offline".
 - A tela carrega `GET /logs` primeiro e processa a fila em paralelo; o contador vem de `observePendingCount()` (Flow do Room).
 
-`SettingsRepository` (em `data/settings/SettingsRepository.kt`) e um singleton com SharedPreferences que expoe a flag `capture_enabled` (default `true`) via `StateFlow`. Compose (aba Perfil) e `MessageRepository` observam a mesma instancia. Quando desligado, `saveIfSuspicious`, `analyzeManualMessage` e `processPendingMessages` retornam cedo sem tocar Room nem HTTP.
+`SettingsRepository` (em `data/settings/SettingsRepository.kt`) e um singleton com SharedPreferences
+(`antifraud_settings`) exposto via `StateFlow`. Guarda:
+
+- `capture_enabled` (default `true`): kill switch de envio. Desligado, `saveIfSuspicious`,
+  `analyzeManualMessage` e `processPendingMessages` retornam cedo sem tocar Room nem HTTP;
+- `call_protection_enabled`: protecao de ligacoes (aba Ligacoes);
+- `reinforced_protection`: protecao reforcada (ver secao propria);
+- `technical_mode`: modo tecnico de demonstracao (so vale no build debug);
+- `protected_since`: quando a protecao continua (notificacoes + acessibilidade) foi ligada.
 
 ## Camada de pre-processamento local
 
@@ -139,7 +148,111 @@ Payload enviado pelo Android:
 }
 ```
 
-### Proteção de ligações (automática)
+Resposta esperada (status 201):
+
+```json
+{
+  "status_db": true,
+  "user_id": "uuid-v5-derivado-do-device-id",
+  "analise": {
+    "tentativa_fraude": true,
+    "score": 0.87,
+    "categoria": "phishing",
+    "indicadores": ["link encurtado", "urgencia"],
+    "veredito_curto": "Veredito Híbrido: AVISO. LLM: Fraude | Modelo Local: Seguro. Justificativa LLM: ..."
+  },
+  "detalhes_hibridos": {"status_final": "aviso", "decisao_llm": 1, "decisao_onnx": 0}
+}
+```
+
+O backend e hibrido: LLM (LM Studio) + modelo ONNX local. `status_final` = `fraude` (os dois
+acusam), `aviso` (so um) ou `seguro`. Hoje o backend devolve e grava `score=0` (ver `RiskLevel` e
+"Pendencias do backend").
+
+Regras:
+
+- No `POST /detect`, enviar `device_id`, nunca `user_id`.
+- `device_id` vem de `DeviceIdentityProvider`.
+- `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual`, `call` (ligacao) ou `unknown`. `FraudApiClient` aplica `source.name.lowercase()` automaticamente.
+- `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint do backend no AWS API Gateway (`*.execute-api.us-east-1.amazonaws.com`), apos a migracao de ECS para API Gateway + Lambda.
+- O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). O app so calcula o
+  `user_id` para o codigo de vinculo (`LinkCode`, mesmo calculo, testado) e so o envia no
+  `GET /logs?user_id=` do responsavel. Nunca em `/detect` nem no lugar do `device_id`.
+
+### GET /logs
+
+Consulta o historico oficial. Query params:
+
+- `device_id`: historico deste aparelho (uso normal);
+- `user_id`: historico de uma pessoa protegida, no app do responsavel (`GuardianRepository`);
+- sem nenhum dos dois o backend faz scan da tabela inteira: nunca chamar assim;
+- `limit` (sem limite se omitido; o app manda 200 no historico e 30 no responsavel);
+- `offset` (default 0).
+
+Resposta (status 200):
+
+```json
+{
+  "status": "success",
+  "total_logs": 42,
+  "data": [
+    {
+      "id": "uuid-v4",
+      "user_id": "uuid-v5",
+      "device_id": "...",
+      "content": "...",
+      "source": "whatsapp",
+      "is_fraud": true,
+      "risk_score": 0.87,
+      "explanation": "Veredito Híbrido: ... Justificativa LLM: ...",
+      "category": "phishing",
+      "detected_at": "2026-05-25T14:41:15.517122+00:00"
+    }
+  ]
+}
+```
+
+### POST /register e POST /login (conta)
+
+```json
+POST /register  {"device_id": "...", "email": "a@b.com", "password": "..."}
+-> 201 {"status": "success", "message": "...", "user_id": "uuid5-do-device_id"}
+-> 400 {"detail": "..."}            422 = e-mail invalido
+
+POST /login     {"email": "a@b.com", "password": "..."}
+-> 200 {"access_token": "<JWT>", "token_type": "bearer", "user_id": "...", "role": "default|admin"}
+-> 401 {"detail": "E-mail ou senha incorretos"}
+```
+
+- Login e opcional: sem conta o app segue pelo `device_id`. O `user_id` da conta e o mesmo uuid5 do
+  `device_id` usado nos logs, entao a conta fica ligada ao historico deste celular.
+- `AuthRepository` guarda e-mail, `user_id`, papel e token em `auth_session.xml`, FORA do backup
+  (`data_extraction_rules.xml`). `register` cria a conta e ja faz login.
+- Os demais endpoints ainda nao exigem o token (out/2026); ele fica guardado para quando exigirem.
+- Papel `admin` liga o modo tecnico (comite de algoritmos) automaticamente. Os 7 toques no logo so
+  funcionam no build debug.
+
+### Pendencias do backend (Mitchell, out/2026)
+
+- `DELETE /logs` e `DELETE /logs/all` estao abertos sem token: qualquer um com a URL apaga o
+  historico de todos. Exigir token de admin ou remover.
+- `/register`: `ConditionExpression='attribute_not_exists(id)'` olha um campo inexistente e sempre
+  passa; cadastrar de novo o mesmo e-mail sobrescreve a senha. `/register` sem `device_id` da 500.
+- `score` sempre 0 no `/detect`: o indice de vulnerabilidade fica "em calculo" (tarefas 7 e 8 do
+  orientador: score real e por dia/semana/mes comparado com a media dos usuarios).
+- Endpoints ainda nao exigem o token do login (`/logs`, `/detect`).
+- Vinculo responsavel <-> pessoa protegida por nome de usuario e notificacao push (hoje o app usa
+  codigo/QR + consulta periodica; ver "Idosos e criancas").
+- Ligacoes: aceitar `session_id` para fazer upsert das analises da mesma ligacao (hoje cada
+  checkpoint vira um registro) e persistir `raciocinio`/`indicadores` (hoje so o veredito curto vai
+  para `explanation`).
+- Limpar os registros duplicados gerados pela fila restaurada do backup (antes do PR #9).
+
+### GET /health
+
+`{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
+
+## Proteção de ligações (automática)
 
 Não existe botão de iniciar. A proteção fica armada e só capta áudio em ligação **recebida e atendida**.
 
@@ -151,7 +264,7 @@ FraudAccessibilityService.onServiceConnected
 -> CallRecordingService (FGS microphone) -> CallAudioCapture (AudioRecord VOICE_RECOGNITION 16 kHz)
 -> pipe -> CallSpeechTranscriber (SpeechRecognizer + EXTRA_AUDIO_SOURCE + EXTRA_SEGMENTED_SESSION)
 -> cada trecho: CallRiskRules (alerta local imediato) + checkpoints POST /detect source=call
--> IDLE: para captura/transcricao, analise final, registro em call_transcripts (Room v3)
+-> IDLE: para captura/transcricao, analise final, registro em call_transcripts (Room)
 ```
 
 Por que assim (AOSP `AudioPolicyService::updateUidStates_l`, CDD 5.4.5):
@@ -188,91 +301,11 @@ acessibilidade + notificação + vibração; mensagens com mais de 5 min (fila o
 O pop-up só aparece em `RiskLevel.HIGH` ("Alta probabilidade de golpe"); `ATTENTION` gera apenas
 notificação de atenção. O texto é genérico, para o usuário leigo.
 
-Pendências para o backend (Mitchell): aceitar `session_id` para fazer upsert das análises da mesma
-ligação e persistir `raciocinio`/`indicadores` (hoje só `veredito_curto` vai para `explanation`).
-
-Resposta esperada (status 201):
-
-```json
-{
-  "status_db": true,
-  "user_id": "uuid-v5-derivado-do-device-id",
-  "analise": {
-    "tentativa_fraude": true,
-    "score": 0.87,
-    "categoria": "phishing",
-    "indicadores": ["link encurtado", "urgencia"],
-    "veredito_curto": "Provavel golpe de phishing"
-  }
-}
-```
-
-Regras:
-
-- Usar `device_id`, nunca `user_id`, no payload novo.
-- `device_id` vem de `DeviceIdentityProvider`.
-- `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual` ou `unknown`. `FraudApiClient` aplica `source.name.lowercase()` automaticamente.
-- `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint do backend no AWS API Gateway (`*.execute-api.us-east-1.amazonaws.com`), apos a migracao de ECS para API Gateway + Lambda.
-- O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). Android nunca cria nem envia `user_id`.
-
-### GET /logs
-
-Consulta o historico oficial. Query params:
-
-- `device_id` (obrigatorio na pratica para evitar scan caro)
-- `limit` (default 50)
-- `offset` (default 0)
-
-Resposta (status 200):
-
-```json
-{
-  "status": "success",
-  "total_logs": 42,
-  "data": [
-    {
-      "id": "uuid-v4",
-      "user_id": "uuid-v5",
-      "device_id": "...",
-      "content": "...",
-      "source": "whatsapp",
-      "is_fraud": true,
-      "risk_score": 0.87,
-      "explanation": "...",
-      "detected_at": "2026-05-25T14:41:15.517122+00:00"
-    }
-  ]
-}
-```
-
-### POST /register e POST /login (conta)
-
-```json
-POST /register  {"device_id": "...", "email": "a@b.com", "password": "..."}
--> 201 {"status": "success", "message": "...", "user_id": "uuid5-do-device_id"}
--> 400 {"detail": "..."}            422 = e-mail invalido
-
-POST /login     {"email": "a@b.com", "password": "..."}
--> 200 {"access_token": "<JWT>", "token_type": "bearer", "user_id": "...", "role": "default|admin"}
--> 401 {"detail": "E-mail ou senha incorretos"}
-```
-
-- Login e opcional: sem conta o app segue pelo `device_id`. O `user_id` da conta e o mesmo uuid5 do
-  `device_id` usado nos logs, entao a conta fica ligada ao historico deste celular.
-- `AuthRepository` guarda e-mail, `user_id`, papel e token em `auth_session.xml`, FORA do backup
-  (`data_extraction_rules.xml`). `register` cria a conta e ja faz login.
-- Os demais endpoints ainda nao exigem o token (out/2026); ele fica guardado para quando exigirem.
-- Papel `admin` liga o modo tecnico (comite de algoritmos) automaticamente. Os 7 toques no logo so
-  funcionam no build debug.
-
-### GET /health
-
-`{ "status": "healthy" }`. Usado para checagem rapida de disponibilidade do backend.
-
 ## Protecao reforcada
 
-Base do futuro modo idoso/crianca (`SettingsRepository.reinforcedProtection`, opcao no Perfil).
-Provisoria ate existir login: depois quem liga/desliga e o responsavel, pela conta dele.
+Parte local do modo idoso/crianca (`SettingsRepository.reinforcedProtection`, opcao no Perfil).
+Ligada tambem por "Este celular é de uma pessoa protegida" (ver "Idosos e criancas"). Quando o
+backend tiver vinculo por conta, quem liga/desliga passa a ser o responsavel.
 
 - So age em `RiskLevel.HIGH`. Regras locais da ligacao sozinhas e `ATTENTION` nunca derrubam a
   ligacao nem fecham app (alarme falso nao pode cortar a conversa de um parente).
@@ -286,7 +319,7 @@ Provisoria ate existir login: depois quem liga/desliga e o responsavel, pela con
 - Build debug: `DebugEndCallReceiver` testa sem golpe real:
   `adb shell am broadcast -n com.example.antifraudagent/.debug.DebugEndCallReceiver` (encerra a
   ligacao) e `... --es mode message` (simula mensagem HIGH no WhatsApp).
-- Falta (depende de login/backend): vincular responsavel pelo nome de usuario e notifica-lo na hora.
+- O vinculo com o responsavel e o aviso para ele estao em "Idosos e criancas".
 
 ## Idosos e criancas (vinculo com o responsavel)
 
@@ -325,13 +358,15 @@ Lista local (Room v4, tabela `trusted_contacts`; `TrustedContactRepository`). Nu
 
 ## Room / SQLite
 
-Room nao e historico oficial.
+Room (`antifraud_database`, v4, migracoes 1->2->3->4 sem perda) NAO e o historico oficial de
+mensagens (esse e o DynamoDB via `GET /logs`). Tabelas:
 
-Use Room apenas para:
+- `analyzed_messages`: so a fila `PENDING` (sem internet ou falha ao gravar no servidor; reenvio
+  quando a conexao voltar; maximo de 100, sai a de menor `layer1Score`);
+- `call_transcripts`: historico de ligacoes da aba Ligacoes (transcricao, veredito, trecho do alerta);
+- `trusted_contacts`: contatos confiaveis (lista local).
 
-- guardar mensagens `PENDING` quando nao ha internet;
-- manter mensagens que falharam ao gravar no historico oficial;
-- reenviar pendencias quando a conexao voltar.
+Nunca trocar o nome do banco nem das SharedPreferences: o usuario perderia fila e configuracoes.
 
 Remover uma mensagem do Room somente quando a resposta do backend trouxer:
 
@@ -345,21 +380,28 @@ Se `status_db=false`, a mensagem deve continuar pendente.
 
 A tela principal deve:
 
-- usar navegacao inferior com `Inicio`, `Historico`, `Analisar` e `Perfil`;
+- usar navegacao inferior com `Início`, `Histórico`, `Analisar`, `Ligações` e `Perfil`;
 - mostrar indice de vulnerabilidade, mensagens analisadas e golpes bloqueados;
 - mostrar quantidade de pendencias offline;
-- ter aba `Analisar` para envio manual de mensagens suspeitas com `source=manual`;
+- ter aba `Analisar` para envio manual de mensagens suspeitas com `source=manual` (os botoes
+  "Print" e "Compartilhar" sao placeholders desativados: `SecondaryActionButton` com
+  `enabled = false`; nao ha OCR nem intent `ACTION_SEND` no manifest);
 - no topo, `ProtectionStatusChip` mostra "Sem proteção" quando notificacoes ou acessibilidade estao
   desligadas (nada e capturado), antes de "Pausado"/"Protegido";
 - no Perfil, nao manter controles sem funcao: "Proteção de ligações" reflete o estado real e abre a
   aba Ligações; "Protegido desde" vem de `SettingsRepository.protectedSinceMillis()` (gravado ao
   ligar a protecao continua, apagado ao desligar);
+- avatar do topo e painel "CONTA" do Perfil abrem a conta (entrar, criar conta, sair);
+- Perfil, de cima para baixo: Conta, Modo de proteção (proteção contínua, de ligações, reforçada),
+  Privacidade (envio para o servidor), Idosos e crianças, Contatos confiáveis, Resumo de atividade
+  e, so no debug com modo tecnico ligado, Modo técnico;
 - consultar historico oficial via `GET /logs?device_id=...`;
 - nao usar Room como fonte do historico.
 
-O `vulnerability_score` exibido no `VulnerabilityCard` e calculado **client-side**
-em `MainActivity.kt` (`vulnerabilityScore(logs)`) a partir da media de `risk_score` dos logs
-retornados pelo backend. Nao existe endpoint que devolva esse agregado; nao tentar buscar do backend.
+Hoje o `vulnerability_score` do `VulnerabilityCard` e calculado **client-side** em `MainActivity.kt`
+(`vulnerabilityScore(logs)`), pela media de `risk_score` dos logs. Pelas tarefas 7 e 8 do orientador
+ele vai passar a vir do backend (score por dia/semana/mes comparado com a media dos usuarios; Luiz
+calcula, Mitchell expoe). Ate existir o endpoint, manter o calculo local.
 
 O backend hibrido ainda grava `score=0`. Zero e tratado como "sem pontuacao" (`meaningfulScore()`):
 o app nao mostra "0%"/"0.00"; o card mostra "—" / "em calculo" e o risco atual vem do pior veredito
@@ -415,6 +457,10 @@ Quebras de build conhecidas e como evitar:
   Nao aceitar sem PR e revisao da equipe. Se cair em estado inconsistente, reverter
   com `git restore gradle.properties gradle/libs.versions.toml gradle/wrapper/gradle-wrapper.properties`.
 
+Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
+`JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"` e `ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk`
+(nao ha `local.properties` no repositorio). Comando: `gradlew assembleDebug testDebugUnitTest`.
+
 ## Regras criticas
 
 - Nao tratar Room como historico oficial.
@@ -426,7 +472,10 @@ Quebras de build conhecidas e como evitar:
 - Preservar debounce/deduplicacao do `FraudAccessibilityService`.
 - Nao adicionar `<?xml version="1.0"?>` em `accessibility_service_config.xml`.
 - Captura passiva, analise manual e fila offline respeitam `SettingsRepository.isCaptureEnabled()`. Nao bypassar essa flag em novos pontos de envio.
-- `vulnerability_score` e client-side; nao migrar para o backend sem decisao explicita da equipe.
+- `vulnerability_score` e client-side ate o backend expor o score por periodo (tarefas 7 e 8).
+- Nunca trocar `applicationId`/pacote `com.example.antifraudagent`, o banco `antifraud_database` nem
+  as SharedPreferences: o Android trataria como outro app ou o usuario perderia dados.
+- `DEBUG_CAPTURE` do `FraudAccessibilityService` fica `false` no codigo publicado.
 
 ## Checklist antes de entregar
 
@@ -444,6 +493,12 @@ Quebras de build conhecidas e como evitar:
 - Kill switch da aba Perfil pausa envio e nao acumula em Room enquanto desligado.
 - `LocalMessagePreprocessor` rejeita ruido conhecido antes de chegar ao backend; aba `Analisar` ignora esse filtro.
 - `FraudAccessibilityService` nao captura conteudo do proprio app nem de apps fora do alvo (validacao em `processWindow`).
+- `./gradlew :app:testDebugUnitTest` passa (contatos confiaveis, resumo de notificacoes, `LinkCode`).
+- Reinstalar o app nao reenvia a fila antiga (log "PENDING restaurados descartados").
+- Entrar / criar conta / sair funcionam; papel `admin` mostra "Como foi decidido".
+- Contato confiavel: atencao nao alerta; alto risco alerta com aviso de conta clonada.
+- Protecao reforcada (debug): `DebugEndCallReceiver` encerra ligacao e simula mensagem HIGH.
+- Responsavel: vincular pelo codigo/QR e receber notificacao de golpe novo.
 
 ## Formato esperado de resposta
 
