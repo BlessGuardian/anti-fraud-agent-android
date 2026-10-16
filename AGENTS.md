@@ -288,6 +288,24 @@ Provisoria ate existir login: depois quem liga/desliga e o responsavel, pela con
   ligacao) e `... --es mode message` (simula mensagem HIGH no WhatsApp).
 - Falta (depende de login/backend): vincular responsavel pelo nome de usuario e notifica-lo na hora.
 
+## Idosos e criancas (vinculo com o responsavel)
+
+Versao sem endpoint de vinculo no backend (`data/guardian`, painel "IDOSOS E CRIANÇAS" no Perfil).
+
+- Celular da pessoa protegida: "Este celular é de uma pessoa protegida" liga a protecao reforcada
+  (pede `ANSWER_PHONE_CALLS`) e mostra o codigo de vinculo em QR/texto: `BG1:<user_id>`.
+- `LinkCode.userIdForDevice` calcula `uuid5(NAMESPACE_OID, device_id)` igual ao backend (testado
+  contra valores do Python e contra o user_id devolvido pelo /login). O codigo existe mesmo sem conta.
+- Celular do responsavel: "Pessoas que eu protejo" -> ler QR (Google code scanner, sem permissao de
+  camera) ou digitar/colar o codigo. Ao vincular, o historico atual e marcado como visto.
+- `GuardianRepository.checkForNewAlerts` consulta `GET /logs?user_id=` e notifica golpe novo
+  (mensagem: atencao ou alto risco; ligacao: so alto risco, 1 aviso por consulta). Roda no
+  `GuardianWorker` (WorkManager, a cada ~15 min com rede) e ao abrir o app.
+- Build debug aceita vincular o proprio celular (demonstra os dois lados com um aparelho so).
+- Limitacoes (aguardando backend): vinculo por codigo em vez de nome de usuario; aviso com atraso;
+  vinculo salvo so no celular do responsavel; depende de `/logs` aceitar consulta sem token. Quando
+  houver endpoint de vinculo e notificacao, so `GuardianRepository` muda.
+
 ## Contatos confiaveis
 
 Lista local (Room v4, tabela `trusted_contacts`; `TrustedContactRepository`). Nunca vai ao backend.

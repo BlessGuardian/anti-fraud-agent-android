@@ -55,12 +55,18 @@ class FraudApiClient(
         }
     }
 
+    /**
+     * GET /logs por `device_id` (este aparelho) ou por `user_id` (pessoa protegida, no app do
+     * responsavel). Hoje o endpoint nao exige token.
+     */
     suspend fun getLogs(
-        deviceId: String,
+        deviceId: String? = null,
+        userId: String? = null,
         limit: Int = 50,
         offset: Int = 0
     ): List<RemoteFraudLog> = withContext(Dispatchers.IO) {
-        val url = URL("$baseUrl/logs?device_id=$deviceId&limit=$limit&offset=$offset")
+        val owner = if (userId != null) "user_id=$userId" else "device_id=$deviceId"
+        val url = URL("$baseUrl/logs?$owner&limit=$limit&offset=$offset")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000

@@ -96,6 +96,8 @@ import com.example.antifraudagent.calls.CallProtectionState
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
+import com.example.antifraudagent.data.guardian.GuardianRepository
+import androidx.lifecycle.lifecycleScope
 import com.example.antifraudagent.data.auth.AuthSession
 import com.example.antifraudagent.data.auth.AuthRepository
 import android.widget.Toast
@@ -310,6 +312,7 @@ class MainActivity : ComponentActivity() {
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
         SettingsRepository.getInstance(this).updateProtectedSince(isNotificationEnabled && isAccessibilityEnabled)
+        lifecycleScope.launch { GuardianRepository.getInstance(this@MainActivity).checkForNewAlerts() }
         refreshCallScreeningState()
         refreshCallRequirements()
     }
@@ -881,13 +884,6 @@ fun ProfileScreen(
                     onClick = onOpenCalls
                 )
                 ReinforcedProtectionRow()
-                ProtectionToggleRow(
-                    title = "Modo supervisionado",
-                    subtitle = "Em breve: avisar o responsável em golpes graves (depende do login)",
-                    checked = false,
-                    enabled = false,
-                    onClick = {}
-                )
             }
         }
 
@@ -914,6 +910,10 @@ fun ProfileScreen(
                     )
                 }
             }
+        }
+
+        item {
+            GuardianPanel()
         }
 
         item {
