@@ -6,7 +6,7 @@
 
 ## Sobre o projeto
 
-O AntiFraud Agent é um aplicativo Android desenvolvido como Trabalho de Conclusão de Curso (TCC) do curso de Ciências da Computação do **Instituto Mauá de Tecnologia (IMT)**.
+O BlessGuardian é um aplicativo Android desenvolvido como Trabalho de Conclusão de Curso (TCC) do curso de Ciências da Computação do **Instituto Mauá de Tecnologia (IMT)**.
 
 O Brasil é um dos países com maior incidência de golpes digitais do mundo. O elo mais fraco da cadeia de segurança é o humano — pessoas que recebem mensagens fraudulentas via WhatsApp, Telegram, SMS e Instagram e, por pressão emocional ou falta de informação, acabam sendo enganadas.
 

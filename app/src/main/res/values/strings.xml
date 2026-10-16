@@ -2,11 +2,11 @@
     <string name="app_name">BlessGuardian</string>
 
     <!--
-        Texto exibido pelo Android na tela de Acessibilidade > AntiFraudAgent.
+        Texto exibido pelo Android na tela de Acessibilidade > BlessGuardian.
         Deve explicar claramente o que o serviço faz — o Android exige isso.
     -->
     <string name="accessibility_service_description">
-        O AntiFraud Agent monitora o conteúdo de mensagens em apps de comunicação
+        O BlessGuardian monitora o conteúdo de mensagens em apps de comunicação
         (WhatsApp, Telegram e Instagram) para detectar golpes e fraudes em tempo real.
         O serviço é restrito exclusivamente a esses aplicativos e nenhum dado é
         compartilhado sem sua autorização.

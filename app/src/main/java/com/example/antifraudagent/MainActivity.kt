@@ -107,7 +107,7 @@ import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.remote.meaningfulScore
 import com.example.antifraudagent.services.FraudAccessibilityService
 import com.example.antifraudagent.services.MessageListenerService
-import com.example.antifraudagent.ui.theme.AntiFraudAgentTheme
+import com.example.antifraudagent.ui.theme.BlessGuardianTheme
 import com.example.antifraudagent.ui.theme.BlessBackground
 import com.example.antifraudagent.ui.theme.BlessBorder
 import com.example.antifraudagent.ui.theme.BlessDanger
@@ -166,7 +166,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionsIfNeeded()
 
         setContent {
-            AntiFraudAgentTheme {
+            BlessGuardianTheme {
                 val repository = remember { MessageRepository(applicationContext) }
                 val settings = remember { SettingsRepository.getInstance(applicationContext) }
                 val captureEnabled by settings.captureEnabled.collectAsState()

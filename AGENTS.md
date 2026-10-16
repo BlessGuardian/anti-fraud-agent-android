@@ -2,7 +2,7 @@
 
 ## Projeto
 
-Repositorio Android do BlessGuardian / AntiFraud Agent.
+Repositorio Android do BlessGuardian.
 
 Objetivo: aplicativo Android em Kotlin/Jetpack Compose para capturar mensagens suspeitas em tempo real, enviar ao backend FastAPI (AWS API Gateway + Lambda) e consultar historico oficial no DynamoDB.
 

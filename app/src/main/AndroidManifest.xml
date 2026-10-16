@@ -31,7 +31,7 @@
     </queries>
 
     <application
-        android:name=".AntiFraudAgentApp"
+        android:name=".BlessGuardianApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -39,14 +39,14 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AntiFraudAgent">
+        android:theme="@style/Theme.BlessGuardian">
 
         <!-- Activity principal -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.AntiFraudAgent">
+            android:theme="@style/Theme.BlessGuardian">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -60,7 +60,7 @@
         <service
             android:name=".services.MessageListenerService"
             android:exported="true"
-            android:label="AntiFraud Listener"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService"/>
@@ -75,7 +75,7 @@
         <service
             android:name=".services.FraudAccessibilityService"
             android:exported="true"
-            android:label="AntiFraud Monitor"
+            android:label="@string/app_name"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>
