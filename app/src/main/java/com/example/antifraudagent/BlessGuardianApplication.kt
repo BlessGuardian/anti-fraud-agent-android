@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class AntiFraudAgentApp : Application() {
+class BlessGuardianApplication : Application() {
 
     private val appScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -40,7 +40,7 @@ class AntiFraudAgentApp : Application() {
             try {
                 MessageRepository(applicationContext).processPendingMessages()
             } catch (e: Exception) {
-                Log.w("AntiFraudAgentApp", "Falha ao processar fila PENDING", e)
+                Log.w("BlessGuardianApplication", "Falha ao processar fila PENDING", e)
             }
         }
     }
