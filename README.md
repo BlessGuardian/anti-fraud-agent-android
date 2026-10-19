@@ -194,6 +194,8 @@ Testes unitários:
 
 ### Demonstração (build debug)
 
+Roteiro completo da apresentação (preparação, cenas, plano B e limitações): [docs/ROTEIRO_DEMONSTRACAO.md](docs/ROTEIRO_DEMONSTRACAO.md).
+
 - **7 toques no logo** ligam e desligam o modo técnico.
 - O mesmo celular pode ser responsável e pessoa protegida ao mesmo tempo (cadastre o próprio número em "Meus responsáveis" para receber o SMS de teste).
 - Simular golpe sem uma mensagem real:
