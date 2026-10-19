@@ -11,9 +11,9 @@ activityCompose = "1.8.0"
 composeBom = "2024.09.00"
 room = "2.6.1"
 coroutines = "1.7.3"
-work = "2.9.1"
 zxing = "3.5.3"
 codeScanner = "16.1.0"
+orgJson = "20240303"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,10 +40,12 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
-# Vinculo responsavel: verificacao periodica, QR code e leitor de QR (sem permissao de camera)
-androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+# Vinculo responsavel: QR code e leitor de QR (sem permissao de camera)
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "codeScanner" }
+
+# Testes JVM: org.json real (o android.jar dos testes locais so tem stubs)
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

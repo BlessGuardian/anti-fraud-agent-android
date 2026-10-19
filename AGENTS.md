@@ -34,7 +34,7 @@ Mensagem capturada
 -> se online: POST /detect
 -> se offline: Room PENDING
 -> backend grava no DynamoDB
--> historico vem de GET /logs?device_id=...
+-> historico vem de GET /logs com o token da conta (login obrigatorio)
 ```
 
 Regras da fila `PENDING` (`MessageRepository`):
@@ -83,6 +83,9 @@ Responsabilidade: higiene de dados antes de chegar ao backend.
 - Rejeita texto que seja exatamente igual ao nome do remetente.
 - Rejeita resumo de notificacoes, sempre (ex: `4 mensagens de 2 conversas`, `3 novas mensagens`,
   `5 mensagens não lidas`, `4 messages from 2 chats`). Texto que so comeca com numero passa.
+- Rejeita o SMS de aviso que o proprio BlessGuardian manda ao responsavel
+  (`GuardianRepository.smsText`), senao o celular do responsavel dava alarme falso. Exige o texto
+  exato do modelo e nenhum link (`isOwnGuardianAlert`), para golpista nao escapar so com o prefixo.
 - Rejeita texto muito curto (< 10 chars) sem sinais de conteudo relevante
   (link, Pix, CPF, banco, senha, codigo, boleto, valor em R$, urgencia financeira).
   A deteccao de sinal relevante e insensivel a acento (ex: `codigo`/`código`,
@@ -171,23 +174,21 @@ acusam), `aviso` (so um) ou `seguro`. Hoje o backend devolve e grava `score=0` (
 
 Regras:
 
-- No `POST /detect`, enviar `device_id`, nunca `user_id`.
+- No `POST /detect`, enviar `device_id`, nunca `user_id`. O app manda tambem o token quando ha sessao
+  (`Authorization: Bearer`); hoje o backend ignora, futuro: gravar pelo usuario da conta.
 - `device_id` vem de `DeviceIdentityProvider`.
 - `source` deve ser enviado em minusculas: `sms`, `whatsapp`, `telegram`, `instagram`, `manual`, `call` (ligacao) ou `unknown`. `FraudApiClient` aplica `source.name.lowercase()` automaticamente.
 - `FraudApiClient.DEFAULT_BASE_URL` aponta para o endpoint do backend no AWS API Gateway (`*.execute-api.us-east-1.amazonaws.com`), apos a migracao de ECS para API Gateway + Lambda.
-- O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). O app so calcula o
-  `user_id` para o codigo de vinculo (`LinkCode`, mesmo calculo, testado) e so o envia no
-  `GET /logs?user_id=` do responsavel. Nunca em `/detect` nem no lugar do `device_id`.
+- O backend deriva `user_id = uuid5(NAMESPACE_OID, device_id)` (deterministico). O app nunca cria
+  nem envia `user_id`: o usuario das consultas vem do token.
 
 ### GET /logs
 
-Consulta o historico oficial. Query params:
+Historico oficial da conta logada. **Exige token** (`Authorization: Bearer <access_token>`) desde
+18/10/2026: o backend ignora `device_id`/`user_id` da query e usa o `user_id` do token. Sem token ou
+com token vencido: 401 -> o app chama `AuthRepository.expire()` e volta para a tela de login.
 
-- `device_id`: historico deste aparelho (uso normal);
-- `user_id`: historico de uma pessoa protegida, no app do responsavel (`GuardianRepository`);
-- sem nenhum dos dois o backend faz scan da tabela inteira: nunca chamar assim;
-- `limit` (sem limite se omitido; o app manda 200 no historico e 30 no responsavel);
-- `offset` (default 0).
+Query params: `limit` (sem limite se omitido; o app manda 200) e `offset` (default 0).
 
 Resposta (status 200):
 
@@ -212,6 +213,18 @@ Resposta (status 200):
 }
 ```
 
+### GET /score
+
+Indice de vulnerabilidade da conta (0..1), **exige token**. Pre-calculado no servidor por
+`POST /admin/calculate-scores` (contagem de logs `is_fraud` por usuario normalizada pela media +- 3
+desvios de todos os usuarios). 200 `{"status","user_id","vulnerability_score"}`; 404 sem registro
+(o app trata como sem valor); 401 token. Usado por `ScoreRepository` (ver "Indice de vulnerabilidade").
+
+### GET /stats
+
+Contagem por categoria (`{"escopo":"usuario|global","stats":[{"categoria","quantidade"}]}`), token
+opcional (sem token = global). E do leaderboard do site (Luiz); o app nao usa.
+
 ### POST /register e POST /login (conta)
 
 ```json
@@ -224,28 +237,41 @@ POST /login     {"email": "a@b.com", "password": "..."}
 -> 401 {"detail": "E-mail ou senha incorretos"}
 ```
 
-- Login e opcional: sem conta o app segue pelo `device_id`. O `user_id` da conta e o mesmo uuid5 do
-  `device_id` usado nos logs, entao a conta fica ligada ao historico deste celular.
+- **Login obrigatorio** (19/10/2026): sem sessao o app mostra `LoginGate` (entrar/criar conta) no
+  lugar das abas. A captura e o `/detect` continuam funcionando antes do login.
+- O `user_id` da conta e o uuid5 do `device_id` do celular onde ela foi criada. Em outro celular,
+  o historico mostrado continua sendo o do celular de cadastro (ver pendencias do backend).
 - `AuthRepository` guarda e-mail, `user_id`, papel e token em `auth_session.xml`, FORA do backup
-  (`data_extraction_rules.xml`). `register` cria a conta e ja faz login.
-- Os demais endpoints ainda nao exigem o token (out/2026); ele fica guardado para quando exigirem.
+  (`data_extraction_rules.xml`), e publica o token em `AuthToken.current`, que o `FraudApiClient`
+  manda em todas as chamadas. `register` cria a conta e ja faz login.
+- O token vale 24h e nao ha renovacao: vencido ao abrir o app ou 401 do servidor -> `expire()`
+  volta ao login com o e-mail preenchido (`last_email`) e o aviso de sessao expirada.
 - Papel `admin` liga o modo tecnico (comite de algoritmos) automaticamente. Os 7 toques no logo so
   funcionam no build debug.
 
-### Pendencias do backend (Mitchell, out/2026)
+### Pendencias do backend (Mitchell, atualizado em 19/10/2026)
 
-- `DELETE /logs` e `DELETE /logs/all` estao abertos sem token: qualquer um com a URL apaga o
-  historico de todos. Exigir token de admin ou remover.
-- `/register`: `ConditionExpression='attribute_not_exists(id)'` olha um campo inexistente e sempre
-  passa; cadastrar de novo o mesmo e-mail sobrescreve a senha. `/register` sem `device_id` da 500.
-- `score` sempre 0 no `/detect`: o indice de vulnerabilidade fica "em calculo" (tarefas 7 e 8 do
-  orientador: score real e por dia/semana/mes comparado com a media dos usuarios).
-- Endpoints ainda nao exigem o token do login (`/logs`, `/detect`).
-- Vinculo responsavel <-> pessoa protegida por nome de usuario e notificacao push (hoje o app usa
-  codigo/QR + consulta periodica; ver "Idosos e criancas").
-- Ligacoes: aceitar `session_id` para fazer upsert das analises da mesma ligacao (hoje cada
-  checkpoint vira um registro) e persistir `raciocinio`/`indicadores` (hoje so o veredito curto vai
-  para `explanation`).
+Seguranca (bloqueia uso publico):
+- `DELETE /logs/all` e `DELETE /logs` sem token: qualquer um apaga o historico de todos.
+- `/register`: `ConditionExpression='attribute_not_exists(id)'` olha atributo inexistente (a chave e
+  `user_id`): recadastrar o mesmo celular sobrescreve e-mail/senha (tomada de conta). E-mail repetido
+  em outro celular e aceito. Sem `device_id` da 500.
+- `POST /admin/calculate-scores` sem token (checagem de admin comentada) e com scan da tabela inteira;
+  `update_item` cria usuarios "fantasma" para aparelhos sem conta.
+- `POST /detect` sem token e sem limite de tamanho de `message_content`; `categoria` do LLM sem validacao.
+- LGPD: grava o texto de toda mensagem, inclusive as seguras (codigos 2FA), sem TTL.
+
+Funcional:
+- Agendar o recalculo do score (EventBridge) no periodo fixo combinado; hoje so muda quando alguem
+  chama `/admin/calculate-scores`. Opcional: devolver no `/score` valor anterior, data e motivo.
+- Score conta `is_fraud=true`, que inclui `aviso`; avaliar contar so `fraude` ou dar peso menor.
+- Token de 24h sem renovacao: aumentar validade ou criar refresh token (login agora e obrigatorio).
+- `/detect` com token: gravar no `user_id` da conta (e guardar o `device_id`) para o historico
+  funcionar em mais de um celular.
+- E-mail ao responsavel: salvar o e-mail do responsavel na conta e enviar por SES quando o
+  `/detect` der "fraude". Aviso no app do responsavel: endpoint de vinculo e/ou push (FCM).
+- `/stats`: contar so golpes (`is_fraud`) e trazer um exemplo por categoria (leaderboard do site).
+- Ligacoes: `session_id` para upsert das analises da mesma ligacao; persistir `raciocinio`/`indicadores`.
 - Limpar os registros duplicados gerados pela fila restaurada do backup (antes do PR #9).
 
 ### GET /health
@@ -323,21 +349,20 @@ backend tiver vinculo por conta, quem liga/desliga passa a ser o responsavel.
 
 ## Idosos e criancas (vinculo com o responsavel)
 
-Versao sem endpoint de vinculo no backend (`data/guardian`, painel "IDOSOS E CRIANÇAS" no Perfil).
+`data/guardian`, painel "IDOSOS E CRIANÇAS" no Perfil. Funciona sem backend.
 
-- Celular da pessoa protegida: "Este celular é de uma pessoa protegida" liga a protecao reforcada
-  (pede `ANSWER_PHONE_CALLS`) e mostra o codigo de vinculo em QR/texto: `BG1:<user_id>`.
-- `LinkCode.userIdForDevice` calcula `uuid5(NAMESPACE_OID, device_id)` igual ao backend (testado
-  contra valores do Python e contra o user_id devolvido pelo /login). O codigo existe mesmo sem conta.
-- Celular do responsavel: "Pessoas que eu protejo" -> ler QR (Google code scanner, sem permissao de
-  camera) ou digitar/colar o codigo. Ao vincular, o historico atual e marcado como visto.
-- `GuardianRepository.checkForNewAlerts` consulta `GET /logs?user_id=` e notifica golpe novo
-  (mensagem: atencao ou alto risco; ligacao: so alto risco, 1 aviso por consulta). Roda no
-  `GuardianWorker` (WorkManager, a cada ~15 min com rede) e ao abrir o app.
-- Build debug aceita vincular o proprio celular (demonstra os dois lados com um aparelho so).
-- Limitacoes (aguardando backend): vinculo por codigo em vez de nome de usuario; aviso com atraso;
-  vinculo salvo so no celular do responsavel; depende de `/logs` aceitar consulta sem token. Quando
-  houver endpoint de vinculo e notificacao, so `GuardianRepository` muda.
+- Celular do RESPONSAVEL: "Proteger alguém" -> preenche nome, celular e e-mail -> QR
+  `BG2:<base64url(JSON {"n","p","e"})>` (`LinkCode`), tambem enviavel por mensagem.
+- Celular da PESSOA PROTEGIDA: "Este celular é de uma pessoa protegida" liga a protecao reforcada
+  (pede `ANSWER_PHONE_CALLS`) -> "Meus responsáveis" -> "Ler QR do responsável" (Google code
+  scanner, sem permissao de camera) ou "Digitar os dados". Pede `SEND_SMS` ao cadastrar o primeiro.
+- Golpe de ALTO risco na pessoa protegida -> `GuardianRepository.notifyGuardians` manda SMS na hora
+  para cada responsavel (mensagem recente em `SuspiciousMessageAlert`; ligacao com HIGH do servidor
+  em `CallRecordingService`, 1 vez por ligacao). Maximo 1 SMS a cada 10 min por responsavel. O SMS
+  nao leva o texto do golpe.
+- E-mail do responsavel fica guardado, mas o envio depende do backend (SES). Aviso no app do
+  responsavel depende de endpoint de vinculo/push. A versao antiga (`BG1:<user_id>` + consulta
+  periodica a `GET /logs?user_id=`) parou de funcionar com o token no /logs e foi removida.
 
 ## Contatos confiaveis
 
@@ -391,21 +416,29 @@ A tela principal deve:
 - no Perfil, nao manter controles sem funcao: "Proteção de ligações" reflete o estado real e abre a
   aba Ligações; "Protegido desde" vem de `SettingsRepository.protectedSinceMillis()` (gravado ao
   ligar a protecao continua, apagado ao desligar);
-- avatar do topo e painel "CONTA" do Perfil abrem a conta (entrar, criar conta, sair);
+- sem sessao, mostrar so o `LoginGate`; avatar do topo e painel "CONTA" do Perfil abrem a conta
+  (dados da conta e sair);
 - Perfil, de cima para baixo: Conta, Modo de proteção (proteção contínua, de ligações, reforçada),
   Privacidade (envio para o servidor), Idosos e crianças, Contatos confiáveis, Resumo de atividade
   e, so no debug com modo tecnico ligado, Modo técnico;
-- consultar historico oficial via `GET /logs?device_id=...`;
+- consultar historico oficial via `GET /logs` com o token;
 - nao usar Room como fonte do historico.
 
-Hoje o `vulnerability_score` do `VulnerabilityCard` e calculado **client-side** em `MainActivity.kt`
-(`vulnerabilityScore(logs)`), pela media de `risk_score` dos logs. Pelas tarefas 7 e 8 do orientador
-ele vai passar a vir do backend (score por dia/semana/mes comparado com a media dos usuarios; Luiz
-calcula, Mitchell expoe). Ate existir o endpoint, manter o calculo local.
+### Indice de vulnerabilidade (estilo Serasa)
 
-O backend hibrido ainda grava `score=0`. Zero e tratado como "sem pontuacao" (`meaningfulScore()`):
-o app nao mostra "0%"/"0.00"; o card mostra "—" / "em calculo" e o risco atual vem do pior veredito
-dos ultimos 7 dias (`currentRiskLevel`). Quando o backend mandar score real, ele volta a aparecer.
+`ScoreRepository` + `ScoreUi.kt`. O valor vem do `GET /score` (0..1, por conta, periodo fixo
+definido pelo backend) e e buscado junto com o historico (`refreshData`).
+
+- O backend so devolve o valor atual. O app guarda cada valor visto em `score_history` (vai no
+  backup; limpo no logout) e, quando muda, cria uma entrada com valor anterior, data em que o app
+  percebeu e o **motivo**, montado a partir dos alertas do historico desde a mudanca anterior
+  (`ScoreRepository.reasonFor`, testado): "Subiu porque N golpes ou alertas..." ou
+  "Atualização geral: o servidor recalculou...". O score depende da media de todos os usuarios,
+  entao pode mudar sem golpe novo do usuario.
+- Card na Inicio: valor, faixa, "▲ subiu / ▼ caiu" e data; toque abre "Detalhes" (anterior ->
+  atual, motivo, como funciona, historico).
+- `risk_score` de cada log continua 0 no backend: zero e tratado como "sem pontuacao"
+  (`meaningfulScore()`) nos cards de mensagem.
 
 ### Nivel de risco (RiskLevel)
 
@@ -472,7 +505,8 @@ Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
 - Preservar debounce/deduplicacao do `FraudAccessibilityService`.
 - Nao adicionar `<?xml version="1.0"?>` em `accessibility_service_config.xml`.
 - Captura passiva, analise manual e fila offline respeitam `SettingsRepository.isCaptureEnabled()`. Nao bypassar essa flag em novos pontos de envio.
-- `vulnerability_score` e client-side ate o backend expor o score por periodo (tarefas 7 e 8).
+- Indice de vulnerabilidade vem do `GET /score`; nao recalcular no app nem chamar
+  `/admin/calculate-scores` (recalcula todos os usuarios; e tarefa agendada do backend).
 - Nunca trocar `applicationId`/pacote `com.example.antifraudagent`, o banco `antifraud_database` nem
   as SharedPreferences: o Android trataria como outro app ou o usuario perderia dados.
 - `DEBUG_CAPTURE` do `FraudAccessibilityService` fica `false` no codigo publicado.
@@ -487,7 +521,7 @@ Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
 - Reonline processa fila pendente.
 - Historico carrega na hora mesmo com fila grande; card mostra "enviando" durante o envio.
 - Pendencia so sai do Room com `status_db=true`.
-- `Atualizar` consulta `/logs?device_id=...`.
+- `Atualizar` consulta `/logs` com o token; 401 volta para o login.
 - `Historico` mostra dados vindos do backend AWS (DynamoDB).
 - `Analisar` envia `source=manual`, mostra score/explicacao e grava no DynamoDB.
 - Kill switch da aba Perfil pausa envio e nao acumula em Room enquanto desligado.
@@ -498,7 +532,9 @@ Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
 - Entrar / criar conta / sair funcionam; papel `admin` mostra "Como foi decidido".
 - Contato confiavel: atencao nao alerta; alto risco alerta com aviso de conta clonada.
 - Protecao reforcada (debug): `DebugEndCallReceiver` encerra ligacao e simula mensagem HIGH.
-- Responsavel: vincular pelo codigo/QR e receber notificacao de golpe novo.
+- Sem sessao aparece o login; entrar/sair/sessao expirada funcionam.
+- Indice: card com valor do `/score`; mudanca gera entrada com motivo em "Detalhes".
+- Responsavel: QR do responsavel lido no celular protegido; golpe HIGH manda SMS (debug: `--es mode message`).
 
 ## Formato esperado de resposta
 

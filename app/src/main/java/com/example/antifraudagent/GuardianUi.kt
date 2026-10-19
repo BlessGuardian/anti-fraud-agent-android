@@ -1,7 +1,6 @@
 package com.example.antifraudagent
 
 import android.Manifest
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -23,21 +22,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FamilyRestroom
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,41 +52,40 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.antifraudagent.calls.CallTerminator
+import com.example.antifraudagent.data.auth.AuthRepository
+import com.example.antifraudagent.data.guardian.GuardianContact
 import com.example.antifraudagent.data.guardian.GuardianRepository
-import com.example.antifraudagent.data.guardian.GuardianRepository.AddResult
-import com.example.antifraudagent.data.guardian.ProtectedPerson
-import com.example.antifraudagent.data.remote.RemoteFraudLog
-import com.example.antifraudagent.data.remote.RiskLevel
+import com.example.antifraudagent.data.guardian.LinkCode
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.ui.theme.BlessBackground
 import com.example.antifraudagent.ui.theme.BlessBorder
 import com.example.antifraudagent.ui.theme.BlessDanger
 import com.example.antifraudagent.ui.theme.BlessMuted
 import com.example.antifraudagent.ui.theme.BlessPrimary
+import com.example.antifraudagent.ui.theme.BlessSafe
 import com.example.antifraudagent.ui.theme.BlessText
+import com.example.antifraudagent.ui.theme.BlessWarning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
-import kotlinx.coroutines.launch
 
 /**
- * Painel "IDOSOS E CRIANCAS" do Perfil (modo idoso/crianca, versao com codigo de vinculo).
- * - "Este celular e de uma pessoa protegida": liga a protecao reforcada e mostra o codigo/QR.
- * - "Pessoas que eu protejo": lado do responsavel; recebe notificacao de golpe da pessoa vinculada.
+ * Painel "IDOSOS E CRIANCAS" do Perfil.
+ * - Celular da pessoa protegida: liga a protecao reforcada e le o QR de cada responsavel; em golpe
+ *   de alto risco, o responsavel recebe SMS na hora.
+ * - Celular do responsavel: "Proteger alguém" gera o QR com o contato dele.
  */
 @Composable
 fun GuardianPanel() {
@@ -95,14 +93,14 @@ fun GuardianPanel() {
     val guardian = remember { GuardianRepository.getInstance(context) }
     val settings = remember { SettingsRepository.getInstance(context) }
     val protectedDevice by guardian.protectedDevice.collectAsState()
-    val people by guardian.people.collectAsState()
-    var showCode by remember { mutableStateOf(false) }
-    var showPeople by remember { mutableStateOf(false) }
+    val guardians by guardian.guardians.collectAsState()
+    var showGuardians by remember { mutableStateOf(false) }
+    var showMyQr by remember { mutableStateOf(false) }
 
     val requestCallPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         settings.setReinforcedProtection(true)
         guardian.setProtectedDevice(true)
-        showCode = true
+        showGuardians = true
     }
 
     GlassPanel {
@@ -110,9 +108,9 @@ fun GuardianPanel() {
         ProtectionToggleRow(
             title = "Este celular é de uma pessoa protegida",
             subtitle = if (protectedDevice) {
-                "Proteção reforçada ligada. O responsável recebe os alertas"
+                "Proteção reforçada ligada. Os responsáveis são avisados por SMS em golpe confirmado"
             } else {
-                "Para o celular do idoso ou da criança: liga a proteção reforçada e gera o código de vínculo"
+                "Para o celular do idoso ou da criança: liga a proteção reforçada e avisa os responsáveis"
             },
             checked = protectedDevice,
             onClick = {
@@ -121,244 +119,280 @@ fun GuardianPanel() {
                     CallTerminator.hasPermission(context) -> {
                         settings.setReinforcedProtection(true)
                         guardian.setProtectedDevice(true)
-                        showCode = true
+                        showGuardians = true
                     }
                     else -> requestCallPermission.launch(Manifest.permission.ANSWER_PHONE_CALLS)
                 }
             }
         )
         if (protectedDevice) {
-            TextButton(onClick = { showCode = true }) {
-                Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Mostrar código de vínculo")
-            }
+            PanelRow(
+                icon = { Icon(Icons.Filled.Sms, contentDescription = null, tint = BlessPrimary, modifier = Modifier.size(22.dp)) },
+                title = "Meus responsáveis",
+                subtitle = when (guardians.size) {
+                    0 -> "Nenhum ainda. Leia o QR do celular do responsável"
+                    1 -> "1 responsável: ${guardians.first().name}"
+                    else -> "${guardians.size} responsáveis"
+                },
+                onClick = { showGuardians = true }
+            )
         }
-        Spacer(modifier = Modifier.height(4.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Filled.FamilyRestroom, contentDescription = null, tint = BlessPrimary, modifier = Modifier.size(22.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Pessoas que eu protejo", fontWeight = FontWeight.Bold, color = BlessText)
-                Text(
-                    text = when (people.size) {
-                        0 -> "Nenhuma. Vincule pelo código do celular da pessoa"
-                        1 -> "1 pessoa: ${people.first().name}"
-                        else -> "${people.size} pessoas"
-                    },
-                    color = BlessMuted,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            IconButton(onClick = { showPeople = true }) {
-                Icon(Icons.Filled.ChevronRight, contentDescription = "Abrir pessoas protegidas", tint = BlessMuted)
-            }
-        }
+        PanelRow(
+            icon = { Icon(Icons.Filled.FamilyRestroom, contentDescription = null, tint = BlessPrimary, modifier = Modifier.size(22.dp)) },
+            title = "Proteger alguém",
+            subtitle = "Mostre seu QR no celular do idoso ou da criança",
+            onClick = { showMyQr = true }
+        )
     }
 
-    if (showCode) LinkCodeSheet(code = guardian.ownLinkCode(), onDismiss = { showCode = false })
-    if (showPeople) ProtectedPeopleSheet(guardian = guardian, people = people, onDismiss = { showPeople = false })
+    if (showGuardians) GuardiansSheet(guardian, guardians, onDismiss = { showGuardians = false })
+    if (showMyQr) MyQrSheet(guardian, onDismiss = { showMyQr = false })
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LinkCodeSheet(code: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val qr = remember(code) { qrBitmap(code) }
-    GuardianSheet(onDismiss) {
-        Text("Código de vínculo", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(
-            "No celular do responsável, abra Perfil → Pessoas que eu protejo → Ler QR code. " +
-                "Ele passa a receber um aviso quando o BlessGuardian detectar golpe neste celular.",
-            color = BlessMuted,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Image(
-            bitmap = qr.asImageBitmap(),
-            contentDescription = "QR code de vínculo",
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(androidx.compose.ui.graphics.Color.White)
-                .padding(16.dp)
-        )
-        Text(code, fontFamily = FontFamily.Monospace, color = BlessText, style = MaterialTheme.typography.bodySmall)
-        OutlinedButton(
-            onClick = {
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(
-                    Intent.EXTRA_TEXT,
-                    "Meu código de vínculo do BlessGuardian: $code"
-                )
-                context.startActivity(Intent.createChooser(send, "Enviar código"))
-            },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Enviar o código por mensagem")
+private fun PanelRow(icon: @Composable () -> Unit, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        icon()
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold, color = BlessText)
+            Text(subtitle, color = BlessMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        IconButton(onClick = onClick) {
+            Icon(Icons.Filled.ChevronRight, contentDescription = "Abrir $title", tint = BlessMuted)
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Celular da pessoa protegida: responsaveis cadastrados pelo QR deles. */
 @Composable
-private fun ProtectedPeopleSheet(guardian: GuardianRepository, people: List<ProtectedPerson>, onDismiss: () -> Unit) {
+private fun GuardiansSheet(guardian: GuardianRepository, guardians: List<GuardianContact>, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var pendingCode by remember { mutableStateOf<String?>(null) }
-    var checking by remember { mutableStateOf(false) }
+    var smsAllowed by remember { mutableStateOf(guardian.canSendSms()) }
+    var pending by remember { mutableStateOf<GuardianContact?>(null) }
+    var manual by remember { mutableStateOf(false) }
+    var protectedName by remember { mutableStateOf(guardian.protectedName()) }
+
+    val requestSms = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        smsAllowed = granted
+        if (!granted) toast(context, "Sem a permissão de SMS, os responsáveis não são avisados.")
+    }
+
+    fun add(contact: GuardianContact) {
+        val added = guardian.addGuardian(contact)
+        toast(context, if (added) "${contact.name} vai receber os avisos." else "Esse responsável já está cadastrado.")
+        if (added && !smsAllowed) requestSms.launch(Manifest.permission.SEND_SMS)
+    }
 
     GuardianSheet(onDismiss) {
-        Text("Pessoas que eu protejo", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text("Meus responsáveis", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text(
-            "Você recebe uma notificação quando o BlessGuardian detectar golpe no celular delas. " +
-                "A verificação roda a cada ~15 minutos e sempre que você abre o app.",
+            "Quando o BlessGuardian confirmar um golpe neste celular, cada responsável recebe um SMS na hora. " +
+                "O SMS não leva o texto da mensagem, só o aviso.",
             color = BlessMuted,
             style = MaterialTheme.typography.bodyMedium
+        )
+        OutlinedTextField(
+            value = protectedName,
+            onValueChange = { protectedName = it; guardian.setProtectedName(it) },
+            label = { Text("Seu nome (aparece no SMS)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
         )
         Button(
-            onClick = { scanQr(context) { pendingCode = it } },
+            onClick = {
+                scanQr(context) { raw ->
+                    val contact = LinkCode.decode(raw)
+                    if (contact == null) toast(context, "Esse QR não é de um responsável do BlessGuardian.") else pending = contact
+                }
+            },
             modifier = Modifier.fillMaxWidth().height(50.dp),
             shape = RoundedCornerShape(14.dp),
             colors = ButtonDefaults.buttonColors(containerColor = BlessPrimary)
         ) {
             Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Ler QR code", fontWeight = FontWeight.Bold)
+            Text("Ler QR do responsável", fontWeight = FontWeight.Bold)
         }
         OutlinedButton(
-            onClick = { pendingCode = clipboardText(context).orEmpty() },
+            onClick = { manual = true },
             modifier = Modifier.fillMaxWidth().height(50.dp),
             shape = RoundedCornerShape(14.dp)
         ) {
-            Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Digitar ou colar o código")
+            Text("Digitar os dados")
         }
 
-        if (people.isEmpty()) {
-            EmptyCard("Ninguém vinculado ainda.")
+        if (guardians.isNotEmpty() && !smsAllowed) {
+            Text("Falta permitir o envio de SMS.", color = BlessWarning, style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = { requestSms.launch(Manifest.permission.SEND_SMS) }) { Text("Permitir SMS") }
+        }
+
+        if (guardians.isEmpty()) {
+            EmptyCard("Nenhum responsável ainda.")
         } else {
-            people.forEach { person ->
-                ProtectedPersonCard(person, guardian, onRemove = { guardian.remove(person) })
-            }
-            TextButton(
-                onClick = {
-                    checking = true
-                    scope.launch {
-                        guardian.checkForNewAlerts()
-                        checking = false
-                        toast(context, "Verificado. Golpes novos aparecem como notificação.")
+            guardians.forEach { contact ->
+                GlassPanel {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(contact.name, fontWeight = FontWeight.Bold, color = BlessText)
+                            Text(contact.phone, color = BlessMuted, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = if (smsAllowed) "SMS: ativo" else "SMS: falta permissão",
+                                color = if (smsAllowed) BlessSafe else BlessWarning,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                            contact.email?.let {
+                                Text(
+                                    "E-mail $it: aviso por e-mail quando o servidor tiver esse envio",
+                                    color = BlessMuted,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                        IconButton(onClick = { guardian.removeGuardian(contact) }) {
+                            Icon(Icons.Filled.Delete, contentDescription = "Remover", tint = BlessDanger)
+                        }
                     }
-                },
-                enabled = !checking,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(if (checking) "Verificando..." else "Verificar agora")
+                }
             }
         }
     }
 
-    pendingCode?.let { initial ->
-        AddPersonDialog(
-            initialCode = initial,
-            onDismiss = { pendingCode = null },
-            onConfirm = { name, code ->
-                scope.launch {
-                    val message = when (guardian.add(name, code)) {
-                        AddResult.ADDED -> { pendingCode = null; "$name vinculado(a)." }
-                        AddResult.INVALID_CODE -> "Código inválido. Confira e tente de novo."
-                        AddResult.OWN_DEVICE -> "Esse é o código deste celular. Use o código do celular da pessoa."
-                        AddResult.ALREADY_LINKED -> { pendingCode = null; "Essa pessoa já está vinculada." }
-                        AddResult.OFFLINE -> "Sem conexão com o servidor. Tente de novo."
-                    }
-                    toast(context, message)
-                }
+    pending?.let { contact ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("Adicionar responsável?") },
+            text = { Text("${contact.name}\n${contact.phone}${contact.email?.let { "\n$it" } ?: ""}") },
+            confirmButton = { TextButton(onClick = { add(contact); pending = null }) { Text("Adicionar") } },
+            dismissButton = { TextButton(onClick = { pending = null }) { Text("Cancelar") } }
+        )
+    }
+    if (manual) {
+        ContactDialog(
+            title = "Novo responsável",
+            initial = null,
+            onDismiss = { manual = false },
+            onConfirm = { add(it); manual = false }
+        )
+    }
+}
+
+/** Celular do responsavel: QR com o proprio contato. */
+@Composable
+private fun MyQrSheet(guardian: GuardianRepository, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val sessionEmail = remember { AuthRepository.getInstance(context).session.value?.email }
+    var contact by remember { mutableStateOf(guardian.myContact()) }
+    var editing by remember { mutableStateOf(contact == null) }
+
+    GuardianSheet(onDismiss) {
+        Text("Proteger alguém", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(
+            "No celular do idoso ou da criança: Perfil → Este celular é de uma pessoa protegida → " +
+                "Meus responsáveis → Ler QR do responsável.",
+            color = BlessMuted,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        val current = contact
+        if (current != null) {
+            val code = remember(current) { LinkCode.encode(current) }
+            val qr = remember(code) { qrBitmap(code) }
+            Image(
+                bitmap = qr.asImageBitmap(),
+                contentDescription = "QR do responsável",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(androidx.compose.ui.graphics.Color.White)
+                    .padding(16.dp)
+            )
+            Text("${current.name} · ${current.phone}${current.email?.let { " · $it" } ?: ""}", color = BlessText)
+            OutlinedButton(
+                onClick = {
+                    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(
+                        Intent.EXTRA_TEXT,
+                        "Código de responsável do BlessGuardian (cole em Meus responsáveis): $code"
+                    )
+                    context.startActivity(Intent.createChooser(send, "Enviar código"))
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Enviar o código por mensagem")
+            }
+            TextButton(onClick = { editing = true }) { Text("Alterar meus dados") }
+        } else {
+            Icon(Icons.Filled.QrCode2, contentDescription = null, tint = BlessMuted, modifier = Modifier.size(48.dp))
+            Text("Preencha seus dados para gerar o QR.", color = BlessMuted)
+        }
+    }
+
+    if (editing) {
+        ContactDialog(
+            title = "Seus dados de responsável",
+            initial = contact ?: GuardianContact("", "", sessionEmail),
+            onDismiss = { editing = false },
+            onConfirm = {
+                guardian.saveMyContact(it)
+                contact = it
+                editing = false
             }
         )
     }
 }
 
 @Composable
-private fun ProtectedPersonCard(person: ProtectedPerson, guardian: GuardianRepository, onRemove: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var alerts by remember(person.userId) { mutableStateOf<List<RemoteFraudLog>?>(null) }
-    var loading by remember(person.userId) { mutableStateOf(false) }
-    var error by remember(person.userId) { mutableStateOf(false) }
-
-    GlassPanel {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(person.name, fontWeight = FontWeight.Bold, color = BlessText)
-                Text("Vinculado por código", color = BlessMuted, style = MaterialTheme.typography.labelSmall)
-            }
-            IconButton(onClick = onRemove) {
-                Icon(Icons.Filled.Delete, contentDescription = "Desvincular", tint = BlessDanger)
-            }
-        }
-        TextButton(
-            onClick = {
-                loading = true
-                error = false
-                scope.launch {
-                    alerts = try {
-                        guardian.history(person).filter { it.riskLevel != RiskLevel.SAFE }.take(5)
-                    } catch (_: Exception) {
-                        error = true
-                        null
-                    }
-                    loading = false
-                }
-            }
-        ) {
-            Text(if (alerts == null) "Ver alertas recentes" else "Atualizar alertas")
-        }
-        when {
-            loading -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            error -> Text("Não foi possível consultar agora.", color = BlessDanger, style = MaterialTheme.typography.bodySmall)
-            alerts?.isEmpty() == true -> Text("Nenhum alerta recente.", color = BlessMuted, style = MaterialTheme.typography.bodySmall)
-        }
-        alerts?.forEach { log ->
-            val visual = logVisual(log)
-            Row(modifier = Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                RiskBadge(visual = visual)
-                Spacer(modifier = Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(log.content, color = BlessText, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        "${sourceLabel(log.source)} · ${compactDate(log.detectedAt)}",
-                        color = BlessMuted,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AddPersonDialog(initialCode: String, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var code by remember { mutableStateOf(initialCode) }
+private fun ContactDialog(
+    title: String,
+    initial: GuardianContact?,
+    onDismiss: () -> Unit,
+    onConfirm: (GuardianContact) -> Unit
+) {
+    val context = LocalContext.current
+    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
+    var phone by remember { mutableStateOf(initial?.phone.orEmpty()) }
+    var email by remember { mutableStateOf(initial?.email.orEmpty()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Vincular pessoa") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nome (ex.: Vó Maria)") }, singleLine = true)
-                OutlinedTextField(value = code, onValueChange = { code = it }, label = { Text("Código de vínculo") }, singleLine = true)
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Nome") }, singleLine = true)
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { phone = it },
+                    label = { Text("Celular com DDD") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("E-mail (opcional)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                )
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(name, code) }) { Text("Vincular") } },
+        confirmButton = {
+            TextButton(onClick = {
+                val contact = GuardianContact(
+                    name = name.trim().ifBlank { "Responsável" },
+                    phone = phone.trim(),
+                    email = email.trim().takeIf { it.contains('@') }
+                )
+                // Valida pelo mesmo caminho do QR (telefone com DDD).
+                if (LinkCode.decode(LinkCode.encode(contact)) == null) {
+                    toast(context, "Informe o celular com DDD.")
+                } else {
+                    onConfirm(contact)
+                }
+            }) { Text("Salvar") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
 }
@@ -390,14 +424,8 @@ private fun scanQr(context: Context, onResult: (String) -> Unit) {
     val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
     GmsBarcodeScanning.getClient(context, options).startScan()
         .addOnSuccessListener { barcode -> barcode.rawValue?.let(onResult) }
-        .addOnFailureListener { toast(context, "Não foi possível abrir o leitor de QR. Use o código.") }
+        .addOnFailureListener { toast(context, "Não foi possível abrir o leitor de QR. Use \"Digitar os dados\".") }
 }
-
-private fun clipboardText(context: Context): String? =
-    context.getSystemService(ClipboardManager::class.java)?.primaryClip
-        ?.takeIf { it.itemCount > 0 }
-        ?.getItemAt(0)?.coerceToText(context)?.toString()
-        ?.let { text -> Regex("""BG1:[0-9a-fA-F-]{36}|[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}""").find(text)?.value }
 
 private fun qrBitmap(text: String, size: Int = 640): Bitmap {
     val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, size, size)

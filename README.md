@@ -71,9 +71,10 @@ O nível de risco mostrado ao usuário vem do veredito híbrido: **alto risco** 
 | Proteção de ligações: transcrição ao vivo no viva-voz e alerta de golpe | ✅ |
 | Contatos confiáveis, com seleção pela agenda (sem permissão de ler contatos) | ✅ |
 | Proteção reforçada: em golpe confirmado, encerra a ligação e fecha o app da conversa | ✅ |
-| Idosos e crianças: vínculo com o responsável por código/QR e aviso de golpe | ✅ (versão por código) |
-| Login e cadastro com a conta BlessGuardian | ✅ |
-| Índice de vulnerabilidade por dia/semana/mês comparado com a média | ⏳ aguardando backend |
+| Idosos e crianças: responsável cadastrado por QR e avisado por SMS em golpe confirmado | ✅ |
+| Aviso ao responsável por e-mail e no app dele | ⏳ aguardando backend |
+| Login obrigatório com a conta BlessGuardian (histórico e índice exigem token) | ✅ |
+| Índice de vulnerabilidade estilo Serasa: valor do servidor, variação, motivo e histórico | ✅ |
 | Leaderboard de golpes frequentes | ⏳ aguardando backend |
 
 ### Proteção de ligações
@@ -84,10 +85,15 @@ Exige o serviço de acessibilidade ativo: durante ligações, o Android só libe
 
 ### Idosos e crianças
 
-- **No celular da pessoa protegida:** Perfil → "Este celular é de uma pessoa protegida". Liga a proteção reforçada e mostra o código de vínculo em QR.
-- **No celular do responsável:** Perfil → "Pessoas que eu protejo" → ler o QR. O app consulta os alertas da pessoa a cada ~15 minutos e ao ser aberto, e notifica golpe novo.
+- **No celular do responsável:** Perfil → "Proteger alguém" → preencha nome, celular e e-mail. O app mostra um QR com esses dados.
+- **No celular da pessoa protegida:** Perfil → "Este celular é de uma pessoa protegida" (liga a proteção reforçada) → "Meus responsáveis" → ler o QR de cada responsável.
+- Quando um golpe de **alto risco** é confirmado, cada responsável recebe um **SMS na hora**, sem o texto do golpe (no máximo 1 a cada 10 minutos por responsável).
 
-Na versão atual, o vínculo é por código (e não por nome de usuário) e o aviso pode ter alguns minutos de atraso. As duas coisas melhoram quando o backend tiver endpoint de vínculo e notificação push.
+O e-mail do responsável já fica guardado; o envio por e-mail e o aviso no app do responsável dependem do backend.
+
+### Índice de vulnerabilidade
+
+Valor de 0 a 1 calculado no servidor, comparando o usuário com os demais. Como no Serasa, ele só muda quando há um motivo: o card mostra se subiu ou caiu e quando, e "Detalhes" mostra o valor anterior, o atual, o motivo e o histórico.
 
 ---
 
@@ -96,7 +102,7 @@ Na versão atual, o vínculo é por código (e não por nome de usuário) e o av
 - **Linguagem:** Kotlin 2.0.21
 - **UI:** Jetpack Compose (Material 3)
 - **Banco local:** Room 2.6.1 (SQLite)
-- **Assincronismo:** Coroutines 1.7.3 e WorkManager 2.9.1
+- **Assincronismo:** Coroutines 1.7.3
 - **QR code:** ZXing (geração) e Google Code Scanner (leitura, sem permissão de câmera)
 - **Build:** AGP 8.13.2, KSP 2.0.21-1.0.28
 - **Min SDK:** API 31 (Android 12)
@@ -112,7 +118,8 @@ app/src/main/java/com/example/antifraudagent/
 ├── BlessGuardianApplication.kt      → envia a fila ao voltar a internet
 ├── AnalysisDetail.kt                → detalhe de qualquer alerta
 ├── AccountUi.kt                     → entrar, criar conta, sair
-├── GuardianUi.kt                    → idosos e crianças (código, QR, responsável)
+├── GuardianUi.kt                    → idosos e crianças (QR do responsável, SMS)
+├── ScoreUi.kt                       → índice de vulnerabilidade e detalhes
 ├── TrustedContactsUi.kt             → contatos confiáveis
 ├── ReinforcedProtectionUi.kt        → proteção reforçada
 ├── CallProtectionScreen.kt          → aba Ligações
@@ -156,6 +163,7 @@ O histórico oficial de mensagens fica no servidor (DynamoDB). No aparelho, o Ro
 | `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE` | Transcrever ligações (nenhum áudio é salvo) |
 | `READ_PHONE_STATE` | Saber quando uma ligação é atendida |
 | `ANSWER_PHONE_CALLS` | Proteção reforçada: encerrar ligação de golpe (pedida só ao ligar a opção) |
+| `SEND_SMS` | Avisar o responsável por SMS em golpe confirmado (pedida só ao cadastrar o primeiro responsável) |
 | `SYSTEM_ALERT_WINDOW` | Aviso por cima da tela quando a acessibilidade não está ativa |
 
 Além disso, o usuário habilita manualmente:
@@ -187,7 +195,7 @@ Testes unitários:
 ### Demonstração (build debug)
 
 - **7 toques no logo** ligam e desligam o modo técnico.
-- O próprio celular pode se vincular como responsável e como pessoa protegida ao mesmo tempo.
+- O mesmo celular pode ser responsável e pessoa protegida ao mesmo tempo (cadastre o próprio número em "Meus responsáveis" para receber o SMS de teste).
 - Simular golpe sem uma mensagem real:
 ```bash
 adb shell am broadcast -n com.example.antifraudagent/.debug.DebugEndCallReceiver --es mode message

@@ -164,7 +164,8 @@ class MessageRepository(context: Context) {
      */
     suspend fun getConfirmedFrauds(): List<RemoteFraudLog> =
         withContext(Dispatchers.IO) {
-            apiClient.getLogs(deviceId = deviceId, limit = 200)
+            // Exige o token da conta (AuthToken); 401 sobe para a tela, que volta ao login.
+            apiClient.getLogs(limit = 200)
                 .filterNot { it.source.equals("call", ignoreCase = true) }
         }
 

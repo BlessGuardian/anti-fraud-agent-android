@@ -13,6 +13,7 @@ import com.example.antifraudagent.MainActivity
 import com.example.antifraudagent.R
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
+import com.example.antifraudagent.data.guardian.GuardianRepository
 import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.settings.SettingsRepository
 import com.example.antifraudagent.services.FraudAccessibilityService
@@ -57,6 +58,8 @@ object SuspiciousMessageAlert {
         notify(appContext, title, reason, content)
 
         if (fresh && high) {
+            // Modo idoso/crianca: SMS na hora para os responsaveis (so se este celular e protegido).
+            GuardianRepository.getInstance(appContext).notifyGuardians("mensagem no $origin")
             val reinforced = SettingsRepository.getInstance(appContext).isReinforcedProtection()
             Handler(Looper.getMainLooper()).post {
                 // Protecao reforcada: tira o usuario do app da conversa (volta para a tela inicial).
