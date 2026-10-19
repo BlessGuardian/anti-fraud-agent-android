@@ -54,6 +54,10 @@ object LocalMessagePreprocessor {
             return reject("resumo de notificacoes", packageName)
         }
 
+        if (isOwnGuardianAlert(normalized)) {
+            return reject("aviso do proprio BlessGuardian ao responsavel", packageName)
+        }
+
         if (!hasRelevantSignal && isKnownSystemNoise(normalized)) {
             return reject("ruido de sistema", packageName)
         }
@@ -126,6 +130,18 @@ object LocalMessagePreprocessor {
     internal fun isNotificationSummary(text: String): Boolean =
         NOTIFICATION_SUMMARY_REGEX.matches(text.trim())
 
+    /**
+     * SMS que o proprio BlessGuardian manda ao responsavel (GuardianRepository.smsText). Sem isso o
+     * celular do responsavel analisava o aviso e dava alarme falso ("fala em Pix, senha ou codigo").
+     * Exige o texto exato do modelo e nenhum link, para golpista nao escapar so com o prefixo.
+     */
+    internal fun isOwnGuardianAlert(text: String): Boolean {
+        val trimmed = text.trim()
+        if (!OWN_GUARDIAN_ALERT_REGEX.matches(trimmed)) return false
+        val lower = trimmed.lowercase()
+        return LINK_MARKERS.none { lower.contains(it) }
+    }
+
     private fun isKnownSystemNoise(text: String): Boolean {
         val lower = text.lowercase()
         if (lower in SYSTEM_EXACT_MATCHES) return true
@@ -183,6 +199,12 @@ object LocalMessagePreprocessor {
 
     private val DATE_WRITTEN_REGEX =
         Regex("""^\d{1,2}\s+de\s+\p{L}+(\s+de\s+\d{4})?$""", RegexOption.IGNORE_CASE)
+
+    private val OWN_GUARDIAN_ALERT_REGEX = Regex(
+        """^BlessGuardian: possível golpe \([^()]{1,40}\) detectado no celular (de [^.]{1,60}|da pessoa que você protege) às \d{2}:\d{2}\. Converse com a pessoa antes de qualquer Pix, senha ou código\.$"""
+    )
+
+    private val LINK_MARKERS = listOf("http", "www", "://", ".com", ".br", ".net", ".org", ".ly", ".me", ".io")
 
     private val NOTIFICATION_SUMMARY_REGEX = Regex(
         """^\d+\s+(novas?\s+)?mensage(m|ns)(\s+novas?)?(\s+n[aã]o\s+lidas?)?(\s+de\s+\d+\s+(conversas?|chats?))?$""" +

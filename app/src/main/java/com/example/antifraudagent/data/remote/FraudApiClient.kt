@@ -1,5 +1,6 @@
 package com.example.antifraudagent.data.remote
 
+import com.example.antifraudagent.data.auth.AuthToken
 import com.example.antifraudagent.data.local.entity.MessageSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +27,7 @@ class FraudApiClient(
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
+            withAuth()
         }
 
         val payload = JSONObject()
@@ -56,22 +58,21 @@ class FraudApiClient(
     }
 
     /**
-     * GET /logs por `device_id` (este aparelho) ou por `user_id` (pessoa protegida, no app do
-     * responsavel). Hoje o endpoint nao exige token.
+     * GET /logs: historico da conta logada. Exige token (desde 18/10/2026): o backend ignora
+     * `device_id`/`user_id` da query e usa o `user_id` do token. Sem token ou com token
+     * expirado responde 401.
      */
     suspend fun getLogs(
-        deviceId: String? = null,
-        userId: String? = null,
         limit: Int = 50,
         offset: Int = 0
     ): List<RemoteFraudLog> = withContext(Dispatchers.IO) {
-        val owner = if (userId != null) "user_id=$userId" else "device_id=$deviceId"
-        val url = URL("$baseUrl/logs?$owner&limit=$limit&offset=$offset")
+        val url = URL("$baseUrl/logs?limit=$limit&offset=$offset")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
             setRequestProperty("Accept", "application/json")
+            withAuth()
         }
 
         try {
@@ -87,6 +88,35 @@ class FraudApiClient(
             }
 
             parseLogs(responseBody)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * GET /score: indice de vulnerabilidade (0..1) da conta logada, pre-calculado no servidor
+     * (POST /admin/calculate-scores). Exige token. 404 = usuario sem registro -> null.
+     */
+    suspend fun getScore(): Float? = withContext(Dispatchers.IO) {
+        val connection = (URL("$baseUrl/score").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            setRequestProperty("Accept", "application/json")
+            withAuth()
+        }
+        try {
+            val code = connection.responseCode
+            if (code == 404) return@withContext null
+            val body = if (code in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            }
+            if (code !in 200..299) throw FraudApiHttpException(code, body)
+            val root = JSONObject(body)
+            if (!root.has("vulnerability_score") || root.isNull("vulnerability_score")) return@withContext null
+            min(1.0, max(0.0, root.getDouble("vulnerability_score"))).toFloat()
         } finally {
             connection.disconnect()
         }
@@ -209,6 +239,7 @@ class FraudApiClient(
                 isFraud = item.optBoolean("is_fraud", false),
                 explanation = item.optStringOrNull("explanation").orEmpty(),
                 source = item.optStringOrNull("source").orEmpty(),
+                category = item.optStringOrNull("category"),
                 detectedAt = item.optStringOrNull("detected_at").orEmpty()
             )
         }
@@ -222,6 +253,10 @@ class FraudApiClient(
     companion object {
         const val DEFAULT_BASE_URL = "https://e5skpalp7g.execute-api.us-east-1.amazonaws.com"
     }
+}
+
+private fun HttpURLConnection.withAuth() {
+    AuthToken.current?.let { setRequestProperty("Authorization", "Bearer $it") }
 }
 
 /**
@@ -276,7 +311,9 @@ data class RemoteFraudLog(
     val isFraud: Boolean,
     val explanation: String,
     val source: String,
-    val detectedAt: String
+    val detectedAt: String,
+    /** Categoria do LLM (phishing, scam, ...); logs antigos nao tem. */
+    val category: String? = null
 ) {
     /** O backend hibrido grava o veredito estruturado dentro de `explanation`. */
     val hybrid: HybridVerdict? get() = HybridVerdict.parse(explanation)

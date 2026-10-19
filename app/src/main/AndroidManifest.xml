@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <!-- Protecao reforcada: encerrar ligacao de golpe (alto risco). Pedida so ao ativar a opcao. -->
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS"/>
+    <!-- Modo idoso/crianca: SMS de alerta ao responsavel em golpe de alto risco. Pedida so ao
+         cadastrar o primeiro responsavel. -->
+    <uses-permission android:name="android.permission.SEND_SMS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>

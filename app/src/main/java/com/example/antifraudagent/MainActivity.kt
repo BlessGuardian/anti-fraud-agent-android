@@ -95,8 +95,8 @@ import com.example.antifraudagent.calls.CallProtectionSnapshot
 import com.example.antifraudagent.calls.CallProtectionState
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
+import com.example.antifraudagent.data.score.ScoreRepository
 import com.example.antifraudagent.data.settings.SettingsRepository
-import com.example.antifraudagent.data.guardian.GuardianRepository
 import androidx.lifecycle.lifecycleScope
 import com.example.antifraudagent.data.auth.AuthSession
 import com.example.antifraudagent.data.auth.AuthRepository
@@ -167,144 +167,157 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             BlessGuardianTheme {
-                val repository = remember { MessageRepository(applicationContext) }
-                val settings = remember { SettingsRepository.getInstance(applicationContext) }
-                val captureEnabled by settings.captureEnabled.collectAsState()
-                val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
-                val technicalMode by settings.technicalMode.collectAsState()
-                val liveCall by CallProtectionState.state.collectAsState()
-                val scope = rememberCoroutineScope()
-                var selectedTab by remember { mutableStateOf(AppTab.Home) }
-                var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
-                val pendingCount by remember { repository.observePendingCount() }
-                    .collectAsState(initial = 0)
-                val syncState by MessageRepository.syncState.collectAsState()
-                var isLoading by remember { mutableStateOf(false) }
-                var feedback by remember { mutableStateOf<String?>(null) }
-                var manualText by remember { mutableStateOf("") }
-                var manualResult by remember { mutableStateOf<FraudAnalysisResult?>(null) }
-                var manualError by remember { mutableStateOf<String?>(null) }
-                var isAnalyzing by remember { mutableStateOf(false) }
-                var manualAnalyzedText by remember { mutableStateOf("") }
-                var manualAnalyzedAt by remember { mutableStateOf(0L) }
-                val callRepository = remember { CallTranscriptRepository(applicationContext) }
-                val callTranscripts by remember { callRepository.observe() }
-                    .collectAsState(initial = emptyList())
-
-                fun refreshCallTranscripts() {
-                    // So reenvia analises que nunca chegaram ao servidor (sem duplicar registros).
-                    scope.launch { callRepository.retryPending() }
-                }
-
-                LaunchedEffect(requestedTab) {
-                    requestedTab?.let {
-                        selectedTab = it
-                        requestedTab = null
-                    }
-                }
-
-                fun refreshData() {
-                    scope.launch {
-                        isLoading = true
-                        feedback = null
-                        try {
-                            // Historico primeiro: esvaziar a fila antes deixava a tela presa em
-                            // "Consultando..." por minutos quando havia muitas pendencias.
-                            fraudLogs = repository.getConfirmedFrauds()
-                                .sortedByDescending { it.detectedAt }
-                            feedback = "Historico atualizado pelo servidor."
-                        } catch (e: Exception) {
-                            feedback = "Nao foi possivel consultar o servidor: ${e.message ?: "erro desconhecido"}"
-                        } finally {
-                            isLoading = false
-                        }
-                    }
-                    scope.launch {
-                        val hadPending = repository.getPendingMessages().isNotEmpty()
-                        // Roda fora da composicao: sair do app nao cancela o envio da fila.
-                        repository.drainQueueInBackground().join()
-                        if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
-                            runCatching { repository.getConfirmedFrauds() }
-                                .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
-                        }
-                    }
-                }
-
-                fun analyzeManualMessage() {
-                    val content = manualText.trim()
-                    if (content.isBlank()) {
-                        manualError = "Cole uma mensagem suspeita para analisar."
-                        manualResult = null
-                        return
-                    }
-
-                    scope.launch {
-                        isAnalyzing = true
-                        manualError = null
-                        manualResult = null
-                        try {
-                            manualResult = repository.analyzeManualMessage(content)
-                            manualAnalyzedText = content
-                            manualAnalyzedAt = System.currentTimeMillis()
-                            fraudLogs = repository.getConfirmedFrauds()
-                                .sortedByDescending { it.detectedAt }
-                        } catch (e: Exception) {
-                            manualError = e.message ?: "Nao foi possivel analisar a mensagem."
-                        } finally {
-                            isAnalyzing = false
-                        }
-                    }
-                }
-
-                LaunchedEffect(Unit) {
-                    refreshData()
-                    refreshCallTranscripts()
-                }
-
-
-                BlessGuardianApp(
-                    selectedTab = selectedTab,
-                    onTabSelected = { selectedTab = it },
-                    notificationEnabled = isNotificationEnabled,
-                    accessibilityEnabled = isAccessibilityEnabled,
-                    captureEnabled = captureEnabled,
-                    pendingCount = pendingCount,
-                    syncState = syncState,
-                    logs = fraudLogs,
-                    isLoading = isLoading,
-                    feedback = feedback,
-                    manualText = manualText,
-                    manualResult = manualResult,
-                    manualAnalyzedText = manualAnalyzedText,
-                    manualAnalyzedAt = manualAnalyzedAt,
-                    manualError = manualError,
-                    isAnalyzing = isAnalyzing,
-                    onManualTextChange = { manualText = it },
-                    onAnalyzeManual = { analyzeManualMessage() },
-                    onRefresh = { refreshData() },
-                    onRequestNotification = { openNotificationListenerSettings() },
-                    onRequestAccessibility = { openAccessibilitySettings() },
-                    onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
-                    technicalMode = technicalMode,
-                    onTechnicalModeChange = { settings.setTechnicalMode(it) },
-                    callRequirements = CallRequirements(
-                        protectionEnabled = callProtectionEnabled,
-                        permissionsGranted = callPermissionsGranted,
-                        accessibilityEnabled = isAccessibilityEnabled,
-                        overlayGranted = overlayGranted,
-                        screeningEnabled = isCallScreeningEnabled
-                    ),
-                    liveCall = liveCall,
-                    callTranscripts = callTranscripts,
-                    onCallProtectionEnabledChange = { settings.setCallProtectionEnabled(it) },
-                    onRequestCallPermissions = { requestCallPermissions() },
-                    onRequestCallScreening = { requestCallScreeningRole() },
-                    onRequestCallOverlay = { requestCallOverlayPermission() },
-                    onRefreshCallTranscripts = { refreshCallTranscripts() }
-                )
+                // Login obrigatorio: /logs e /score exigem token. A captura continua por baixo.
+                val session by remember { AuthRepository.getInstance(applicationContext).session }.collectAsState()
+                if (session == null) LoginGate() else AppContent()
             }
         }
         handleIntent(intent)
+    }
+
+    /** Conteudo do app com sessao valida (ver LoginGate). */
+    @Composable
+    private fun AppContent() {
+        val repository = remember { MessageRepository(applicationContext) }
+        val settings = remember { SettingsRepository.getInstance(applicationContext) }
+        val captureEnabled by settings.captureEnabled.collectAsState()
+        val callProtectionEnabled by settings.callProtectionEnabled.collectAsState()
+        val technicalMode by settings.technicalMode.collectAsState()
+        val liveCall by CallProtectionState.state.collectAsState()
+        val scope = rememberCoroutineScope()
+        var selectedTab by remember { mutableStateOf(AppTab.Home) }
+        var fraudLogs by remember { mutableStateOf<List<RemoteFraudLog>>(emptyList()) }
+        val pendingCount by remember { repository.observePendingCount() }
+            .collectAsState(initial = 0)
+        val syncState by MessageRepository.syncState.collectAsState()
+        var isLoading by remember { mutableStateOf(false) }
+        var feedback by remember { mutableStateOf<String?>(null) }
+        var manualText by remember { mutableStateOf("") }
+        var manualResult by remember { mutableStateOf<FraudAnalysisResult?>(null) }
+        var manualError by remember { mutableStateOf<String?>(null) }
+        var isAnalyzing by remember { mutableStateOf(false) }
+        var manualAnalyzedText by remember { mutableStateOf("") }
+        var manualAnalyzedAt by remember { mutableStateOf(0L) }
+        val callRepository = remember { CallTranscriptRepository(applicationContext) }
+        val callTranscripts by remember { callRepository.observe() }
+            .collectAsState(initial = emptyList())
+
+        fun refreshCallTranscripts() {
+            // So reenvia analises que nunca chegaram ao servidor (sem duplicar registros).
+            scope.launch { callRepository.retryPending() }
+        }
+
+        LaunchedEffect(requestedTab) {
+            requestedTab?.let {
+                selectedTab = it
+                requestedTab = null
+            }
+        }
+
+        fun refreshData() {
+            scope.launch {
+                isLoading = true
+                feedback = null
+                try {
+                    // Historico primeiro: esvaziar a fila antes deixava a tela presa em
+                    // "Consultando..." por minutos quando havia muitas pendencias.
+                    fraudLogs = repository.getConfirmedFrauds()
+                        .sortedByDescending { it.detectedAt }
+                    feedback = "Historico atualizado pelo servidor."
+                    runCatching { ScoreRepository.getInstance(applicationContext).refresh(fraudLogs) }
+                        .onFailure { if (isUnauthorized(it)) AuthRepository.getInstance(applicationContext).expire() }
+                } catch (e: Exception) {
+                    if (isUnauthorized(e)) AuthRepository.getInstance(applicationContext).expire()
+                    feedback = "Nao foi possivel consultar o servidor: ${e.message ?: "erro desconhecido"}"
+                } finally {
+                    isLoading = false
+                }
+            }
+            scope.launch {
+                val hadPending = repository.getPendingMessages().isNotEmpty()
+                // Roda fora da composicao: sair do app nao cancela o envio da fila.
+                repository.drainQueueInBackground().join()
+                if (hadPending && MessageRepository.syncState.value == MessageRepository.SyncState.IDLE) {
+                    runCatching { repository.getConfirmedFrauds() }
+                        .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
+                }
+            }
+        }
+
+        fun analyzeManualMessage() {
+            val content = manualText.trim()
+            if (content.isBlank()) {
+                manualError = "Cole uma mensagem suspeita para analisar."
+                manualResult = null
+                return
+            }
+
+            scope.launch {
+                isAnalyzing = true
+                manualError = null
+                manualResult = null
+                try {
+                    manualResult = repository.analyzeManualMessage(content)
+                    manualAnalyzedText = content
+                    manualAnalyzedAt = System.currentTimeMillis()
+                    // Atualizar o historico e secundario: a analise ja foi feita e mostrada.
+                    runCatching { repository.getConfirmedFrauds() }
+                        .onSuccess { logs -> fraudLogs = logs.sortedByDescending { it.detectedAt } }
+                        .onFailure { if (isUnauthorized(it)) AuthRepository.getInstance(applicationContext).expire() }
+                } catch (e: Exception) {
+                    manualError = e.message ?: "Nao foi possivel analisar a mensagem."
+                } finally {
+                    isAnalyzing = false
+                }
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            refreshData()
+            refreshCallTranscripts()
+        }
+
+
+        BlessGuardianApp(
+            selectedTab = selectedTab,
+            onTabSelected = { selectedTab = it },
+            notificationEnabled = isNotificationEnabled,
+            accessibilityEnabled = isAccessibilityEnabled,
+            captureEnabled = captureEnabled,
+            pendingCount = pendingCount,
+            syncState = syncState,
+            logs = fraudLogs,
+            isLoading = isLoading,
+            feedback = feedback,
+            manualText = manualText,
+            manualResult = manualResult,
+            manualAnalyzedText = manualAnalyzedText,
+            manualAnalyzedAt = manualAnalyzedAt,
+            manualError = manualError,
+            isAnalyzing = isAnalyzing,
+            onManualTextChange = { manualText = it },
+            onAnalyzeManual = { analyzeManualMessage() },
+            onRefresh = { refreshData() },
+            onRequestNotification = { openNotificationListenerSettings() },
+            onRequestAccessibility = { openAccessibilitySettings() },
+            onCaptureEnabledChange = { settings.setCaptureEnabled(it) },
+            technicalMode = technicalMode,
+            onTechnicalModeChange = { settings.setTechnicalMode(it) },
+            callRequirements = CallRequirements(
+                protectionEnabled = callProtectionEnabled,
+                permissionsGranted = callPermissionsGranted,
+                accessibilityEnabled = isAccessibilityEnabled,
+                overlayGranted = overlayGranted,
+                screeningEnabled = isCallScreeningEnabled
+            ),
+            liveCall = liveCall,
+            callTranscripts = callTranscripts,
+            onCallProtectionEnabledChange = { settings.setCallProtectionEnabled(it) },
+            onRequestCallPermissions = { requestCallPermissions() },
+            onRequestCallScreening = { requestCallScreeningRole() },
+            onRequestCallOverlay = { requestCallOverlayPermission() },
+            onRefreshCallTranscripts = { refreshCallTranscripts() }
+        )
     }
 
     override fun onResume() {
@@ -312,7 +325,6 @@ class MainActivity : ComponentActivity() {
         isNotificationEnabled = isNotificationListenerEnabled()
         isAccessibilityEnabled = FraudAccessibilityService.isEnabled(this)
         SettingsRepository.getInstance(this).updateProtectedSince(isNotificationEnabled && isAccessibilityEnabled)
-        lifecycleScope.launch { GuardianRepository.getInstance(this@MainActivity).checkForNewAlerts() }
         refreshCallScreeningState()
         refreshCallRequirements()
     }
@@ -613,7 +625,7 @@ fun HomeScreen(
 
     ScreenColumn(padding = padding) {
         item {
-            VulnerabilityCard(score = vulnerabilityScore(logs), currentLevel = currentRiskLevel(logs))
+            VulnerabilityCard(currentLevel = currentRiskLevel(logs))
         }
 
         item {
@@ -850,7 +862,7 @@ fun ProfileScreen(
     val analyzedCount = logs.size
     val blockedCount = logs.count { it.riskLevel == RiskLevel.HIGH }
     val attentionCount = logs.count { it.riskLevel == RiskLevel.ATTENTION }
-    val vulnerability = vulnerabilityScore(logs)
+    val vulnerability by remember { ScoreRepository.getInstance(context).history }.collectAsState()
 
     ScreenColumn(padding = padding) {
         item {
@@ -932,11 +944,12 @@ fun ProfileScreen(
                     pendingCount.toString(),
                     if (pendingCount > 0) BlessWarning else BlessSafe
                 )
-                if (vulnerability != null) {
+                val score = vulnerability.firstOrNull()?.value
+                if (score != null) {
                     SummaryRow(
                         "Índice de vulnerabilidade",
-                        "${formatScore(vulnerability)} - ${riskName(vulnerability)}",
-                        riskVisual(vulnerability).color
+                        "${formatScore(score)} - ${riskName(score)}",
+                        riskVisual(score).color
                     )
                 } else {
                     SummaryRow("Índice de vulnerabilidade", "em cálculo", BlessMuted)
@@ -1118,48 +1131,6 @@ fun PageIntro(text: String) {
 }
 
 @Composable
-fun VulnerabilityCard(score: Float?, currentLevel: RiskLevel) {
-    // Sem pontuacao do servidor, o arco fica vazio e o risco atual vem dos vereditos recentes.
-    val currentVisual = levelVisual(currentLevel, score)
-    GlassPanel {
-        Text(
-            text = "INDICE DE VULNERABILIDADE",
-            style = MaterialTheme.typography.labelLarge,
-            color = BlessMuted
-        )
-        Spacer(modifier = Modifier.height(18.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(86.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            GaugeArc(score = score ?: 0f)
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = score?.let { formatScore(it) } ?: "—",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = BlessPrimary
-                )
-                Text(
-                    text = score?.let { riskName(it) } ?: "em cálculo",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BlessMuted
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(18.dp))
-        // Status de conexao/fila fica no ProtectionStatusChip do topo; aqui so o risco.
-        StatusPill(
-            modifier = Modifier.fillMaxWidth(),
-            label = currentVisual.label.lowercase(),
-            value = "risco atual",
-            visual = currentVisual
-        )
-    }
-}
-
-@Composable
 fun GaugeArc(score: Float) {
     Canvas(modifier = Modifier.size(width = 142.dp, height = 82.dp)) {
         val strokeWidth = 12.dp.toPx()
@@ -1250,10 +1221,14 @@ fun RecentAlertRow(log: RemoteFraudLog) {
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // A origem cede espaco (reticencias) para o selo de risco nao quebrar linha.
                     Text(
                         text = sourceLabel(log.source),
                         style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     RiskBadge(visual = visual)
@@ -1615,7 +1590,9 @@ fun RiskBadge(visual: RiskVisual) {
             text = visual.label.lowercase(),
             color = visual.color,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            softWrap = false
         )
     }
 }
@@ -1654,13 +1631,6 @@ fun levelVisual(level: RiskLevel, score: Float?): RiskVisual = when (level) {
     RiskLevel.SAFE -> score.meaningfulScore()?.let { riskVisual(it) } ?: RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
 }
 
-/** Media de risk_score; null enquanto o servidor nao manda pontuacao (todos os scores zerados). */
-fun vulnerabilityScore(logs: List<RemoteFraudLog>): Float? =
-    logs.takeIf { list -> list.any { it.riskScore.meaningfulScore() != null } }
-        ?.map { it.riskScore }
-        ?.average()
-        ?.toFloat()
-
 /** Pior veredito dos ultimos 7 dias. */
 fun currentRiskLevel(logs: List<RemoteFraudLog>): RiskLevel {
     val since = java.time.OffsetDateTime.now().minusDays(7)
@@ -1676,6 +1646,10 @@ fun currentRiskLevel(logs: List<RemoteFraudLog>): RiskLevel {
 }
 
 private const val LOGO_TAP_WINDOW_MS = 1_500L
+
+/** Servidor recusou o token (vencido/invalido): volta para a tela de login. */
+fun isUnauthorized(error: Throwable): Boolean =
+    error is com.example.antifraudagent.data.remote.FraudApiHttpException && error.code == 401
 
 @Composable
 fun DetailsHint() {

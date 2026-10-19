@@ -20,6 +20,7 @@ import com.example.antifraudagent.data.local.call.CallTranscript
 import com.example.antifraudagent.data.local.call.CallTranscriptSyncStatus
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
 import com.example.antifraudagent.data.remote.HybridVerdict
+import com.example.antifraudagent.data.guardian.GuardianRepository
 import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -59,6 +60,7 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
         var lastServer: FraudAnalysisResult? = null
         var serverConfirmedFraud = false
         var callTerminated = false
+        var guardiansNotified = false
         var alertAt: Long? = null
         var alertSource: String? = null
         var alertReason: String? = null
@@ -323,7 +325,13 @@ class CallRecordingService : Service(), CallSpeechTranscriber.Listener {
                         current.alertReason = reason
                         CallProtectionState.update { it.copy(alertReason = reason) }
                     }
-                    if (result.riskLevel == RiskLevel.HIGH) terminateIfReinforced(current, reason, excerpt)
+                    if (result.riskLevel == RiskLevel.HIGH) {
+                        if (!current.guardiansNotified) {
+                            current.guardiansNotified = true
+                            GuardianRepository.getInstance(this@CallRecordingService).notifyGuardians("ligação")
+                        }
+                        terminateIfReinforced(current, reason, excerpt)
+                    }
                 }
             }
             if (current.checkpointDirty) {
