@@ -251,28 +251,50 @@ POST /login     {"email": "a@b.com", "password": "..."}
 
 ### Pendencias do backend (Mitchell, atualizado em 19/10/2026)
 
+Mensagem enviada ao Mitchell em 19/10, em ordem de prioridade. O app ja esta pronto para cada item;
+quando o backend mudar, normalmente nada (ou so o repositorio indicado) precisa mudar no app.
+
+Urgente:
+- Subir no GitHub as correcoes feitas direto na AWS em 19/10: cadastro (`'vulnerability_score': 0.0`
+  -> `Decimal('0')`, dava "Float types are not supported") e geracao do token (dava 500 no /login).
+  O ultimo commit do repositorio ainda e o de 18/10; uma imagem nova a partir do repo traz os erros de volta.
+- Cada conta com o proprio `user_id`: hoje `user_id = uuid5(device_id)`, entao toda conta criada no
+  mesmo celular ve o mesmo historico e cada cadastro sobrescreve o anterior. Proposta: `/register`
+  gera uuid4 e recusa e-mail repetido; `/detect` grava no `user_id` do token (o app ja manda o token),
+  guardando o `device_id` so como informacao. Resolve tambem o historico em mais de um celular.
+
 Seguranca (bloqueia uso publico):
 - `DELETE /logs/all` e `DELETE /logs` sem token: qualquer um apaga o historico de todos.
 - `/register`: `ConditionExpression='attribute_not_exists(id)'` olha atributo inexistente (a chave e
-  `user_id`): recadastrar o mesmo celular sobrescreve e-mail/senha (tomada de conta). E-mail repetido
-  em outro celular e aceito. Sem `device_id` da 500.
+  `user_id`): recadastrar sobrescreve e-mail/senha (tomada de conta). Sem `device_id` da 500.
 - `POST /admin/calculate-scores` sem token (checagem de admin comentada) e com scan da tabela inteira;
   `update_item` cria usuarios "fantasma" para aparelhos sem conta.
-- `POST /detect` sem token e sem limite de tamanho de `message_content`; `categoria` do LLM sem validacao.
+- `POST /detect` sem limite de tamanho de `message_content`; `categoria` do LLM sem validacao.
 - LGPD: grava o texto de toda mensagem, inclusive as seguras (codigos 2FA), sem TTL.
 
-Funcional:
-- Agendar o recalculo do score (EventBridge) no periodo fixo combinado; hoje so muda quando alguem
-  chama `/admin/calculate-scores`. Opcional: devolver no `/score` valor anterior, data e motivo.
-- Score conta `is_fraud=true`, que inclui `aviso`; avaliar contar so `fraude` ou dar peso menor.
-- Token de 24h sem renovacao: aumentar validade ou criar refresh token (login agora e obrigatorio).
-- `/detect` com token: gravar no `user_id` da conta (e guardar o `device_id`) para o historico
-  funcionar em mais de um celular.
-- E-mail ao responsavel: salvar o e-mail do responsavel na conta e enviar por SES quando o
-  `/detect` der "fraude". Aviso no app do responsavel: endpoint de vinculo e/ou push (FCM).
-- `/stats`: contar so golpes (`is_fraud`) e trazer um exemplo por categoria (leaderboard do site).
-- Ligacoes: `session_id` para upsert das analises da mesma ligacao; persistir `raciocinio`/`indicadores`.
+Score:
+- Agendar o recalculo (EventBridge) no periodo fixo combinado; hoje so muda quando alguem chama
+  `/admin/calculate-scores`. Opcional: `/score` devolver valor anterior, data e motivo (o app ja
+  monta o motivo; trocaria em `ScoreRepository`).
+- Conta `is_fraud=true`, que inclui `aviso`; avaliar contar so `fraude` ou dar peso menor.
+
+Login:
+- Token de 24h sem renovacao: aumentar (ex.: 30 dias) ou refresh token, porque o login e obrigatorio.
+- "Esqueci minha senha": `POST /forgot-password` (codigo de 6 digitos por e-mail via SES, ~15 min) e
+  `POST /reset-password` (e-mail + codigo + senha nova). A tela do app so entra quando existirem.
+
+Responsavel:
+- E-mail: endpoint para salvar o e-mail do responsavel na conta e envio por SES quando o `/detect`
+  der "fraude" (o app ja guarda o e-mail lido do QR). Aviso no app do responsavel: vinculo e/ou push (FCM).
+
+Menores:
+- `/stats`: contar so golpes (`is_fraud`; hoje 175 aparecem como "Desconhecido") e trazer um exemplo
+  por categoria (leaderboard do site, Luiz).
+- Ligacoes: `session_id` para juntar as analises da mesma ligacao; persistir `raciocinio`/`indicadores`.
 - Limpar os registros duplicados gerados pela fila restaurada do backup (antes do PR #9).
+- Pipeline de deploy (GitHub Actions: build da imagem -> ECR -> atualizar a Lambda) com role IAM via
+  OIDC, para corrigir sem depender de deploy manual. Confirmar se o backend continua na Lambda ou vai
+  para EC2 antes de escrever o workflow.
 
 ### GET /health
 
