@@ -92,6 +92,7 @@ import com.example.antifraudagent.calls.CallProtectionState
 import com.example.antifraudagent.calls.CallTranscriptRepository
 import com.example.antifraudagent.data.repository.MessageRepository
 import com.example.antifraudagent.data.score.ScoreRepository
+import com.example.antifraudagent.data.score.ScoreStatus
 import com.example.antifraudagent.data.settings.SettingsRepository
 import androidx.lifecycle.lifecycleScope
 import com.example.antifraudagent.data.auth.AuthSession
@@ -859,6 +860,7 @@ fun ProfileScreen(
     val blockedCount = logs.count { it.riskLevel == RiskLevel.HIGH }
     val attentionCount = logs.count { it.riskLevel == RiskLevel.ATTENTION }
     val vulnerability by remember { ScoreRepository.getInstance(context).history }.collectAsState()
+    val vulnerabilityStatus by remember { ScoreRepository.getInstance(context).status }.collectAsState()
 
     ScreenColumn(padding = padding) {
         item {
@@ -949,7 +951,15 @@ fun ProfileScreen(
                         band.color
                     )
                 } else {
-                    SummaryRow("Índice de vulnerabilidade", "em cálculo", BlessMuted)
+                    SummaryRow(
+                        "Índice de vulnerabilidade",
+                        when (vulnerabilityStatus) {
+                            ScoreStatus.NOT_CALCULATED -> "ainda não calculado"
+                            ScoreStatus.ERROR -> "não foi possível consultar"
+                            else -> "em cálculo"
+                        },
+                        BlessMuted
+                    )
                 }
             }
         }
