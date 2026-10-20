@@ -3,6 +3,7 @@ package com.example.antifraudagent.data.score
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.antifraudagent.data.remote.FraudApiClient
+import com.example.antifraudagent.data.remote.FraudApiHttpException
 import com.example.antifraudagent.data.remote.RemoteFraudLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,16 +37,38 @@ class ScoreRepository private constructor(context: Context) {
     /** Mais recente primeiro. */
     val history: StateFlow<List<ScoreEntry>> = _history.asStateFlow()
 
-    /** Busca o score e registra mudanca. Lanca FraudApiHttpException (ex.: 401) para a tela tratar. */
+    private val _status = MutableStateFlow(ScoreStatus.UNKNOWN)
+    /** Resultado da ultima consulta, para o card explicar quando nao ha valor. */
+    val status: StateFlow<ScoreStatus> = _status.asStateFlow()
+
+    /** Busca o score e registra mudanca. Lanca FraudApiHttpException 401 para a tela tratar. */
     suspend fun refresh(logs: List<RemoteFraudLog>) = withContext(Dispatchers.IO) {
-        val value = apiClient.getScore() ?: return@withContext
+        val value = try {
+            apiClient.getScore()
+        } catch (e: FraudApiHttpException) {
+            if (e.code == 401) throw e
+            _status.value = ScoreStatus.ERROR
+            return@withContext
+        } catch (_: Exception) {
+            _status.value = ScoreStatus.ERROR
+            return@withContext
+        }
+        if (value == null) {
+            // 404: a conta ainda nao tem indice no servidor (sem registro ou recalculo nao rodou).
+            _status.value = ScoreStatus.NOT_CALCULATED
+            return@withContext
+        }
+        _status.value = ScoreStatus.OK
         val entry = nextEntry(_history.value.firstOrNull(), value, logs, System.currentTimeMillis())
             ?: return@withContext
         save(listOf(entry) + _history.value.take(MAX_HISTORY - 1))
     }
 
     /** Ao sair da conta: o historico e de quem estava logado. */
-    fun clear() = save(emptyList())
+    fun clear() {
+        _status.value = ScoreStatus.UNKNOWN
+        save(emptyList())
+    }
 
     private fun save(list: List<ScoreEntry>) {
         val json = JSONArray()
@@ -161,3 +184,13 @@ data class ScoreEntry(
     val observedAt: Long,
     val reason: String
 )
+
+enum class ScoreStatus {
+    /** Ainda nao consultou nesta sessao do app. */
+    UNKNOWN,
+    OK,
+    /** Servidor respondeu 404 ou sem valor: indice ainda nao calculado para a conta. */
+    NOT_CALCULATED,
+    /** Erro de rede ou do servidor (exceto 401, que leva ao login). */
+    ERROR
+}

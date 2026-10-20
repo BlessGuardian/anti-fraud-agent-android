@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import com.example.antifraudagent.data.remote.RiskLevel
 import com.example.antifraudagent.data.score.ScoreEntry
 import com.example.antifraudagent.data.score.ScoreRepository
+import com.example.antifraudagent.data.score.ScoreStatus
 import com.example.antifraudagent.ui.theme.BlessBackground
 import com.example.antifraudagent.ui.theme.BlessBorder
 import com.example.antifraudagent.ui.theme.BlessDanger
@@ -98,7 +99,9 @@ fun scoreBand(points: Int): ScoreBand = when {
 @Composable
 fun VulnerabilityCard(currentLevel: RiskLevel) {
     val context = LocalContext.current
-    val history by remember { ScoreRepository.getInstance(context).history }.collectAsState()
+    val repository = remember { ScoreRepository.getInstance(context) }
+    val history by repository.history.collectAsState()
+    val status by repository.status.collectAsState()
     var showDetails by remember { mutableStateOf(false) }
     val latest = history.firstOrNull()
     val currentVisual = levelVisual(currentLevel, latest?.value)
@@ -114,12 +117,30 @@ fun VulnerabilityCard(currentLevel: RiskLevel) {
             if (latest != null) Icon(Icons.Filled.ChevronRight, contentDescription = "Ver histórico", tint = BlessPrimary)
         }
         Spacer(modifier = Modifier.height(12.dp))
-        ScoreGaugeWithValue(points = latest?.let { scorePoints(it.value) }, width = 220.dp)
+        ScoreGaugeWithValue(
+            points = latest?.let { scorePoints(it.value) },
+            width = 220.dp,
+            emptyLabel = when (status) {
+                ScoreStatus.NOT_CALCULATED -> "Ainda não calculado"
+                ScoreStatus.ERROR -> "Não foi possível consultar"
+                else -> "aguardando o servidor"
+            }
+        )
         latest?.let { entry ->
             Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = "${shortChange(entry)} · atualizado em ${dayMonth.format(Date(entry.observedAt))}",
                 color = changeColor(entry),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        statusNote(status, hasValue = latest != null)?.let { note ->
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = note,
+                color = BlessMuted,
                 style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
@@ -141,7 +162,7 @@ fun VulnerabilityCard(currentLevel: RiskLevel) {
 
 /** Velocimetro com os pontos no centro e o nome da faixa embaixo. */
 @Composable
-private fun ScoreGaugeWithValue(points: Int?, width: Dp) {
+private fun ScoreGaugeWithValue(points: Int?, width: Dp, emptyLabel: String = "aguardando o servidor") {
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(contentAlignment = Alignment.BottomCenter) {
             ScoreGauge(points = points, width = width)
@@ -158,7 +179,7 @@ private fun ScoreGaugeWithValue(points: Int?, width: Dp) {
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = points?.let { scoreBand(it).label } ?: "aguardando o servidor",
+            text = points?.let { scoreBand(it).label } ?: emptyLabel,
             color = points?.let { scoreBand(it).color } ?: BlessMuted,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold
@@ -374,6 +395,15 @@ private fun BandLegend(range: String, label: String, color: Color) {
 }
 
 private const val MAX_BARS = 4
+
+/** Explica por que o card esta sem valor (ou desatualizado), em vez de "aguardando" para sempre. */
+private fun statusNote(status: ScoreStatus, hasValue: Boolean): String? = when (status) {
+    ScoreStatus.NOT_CALCULATED -> if (hasValue) null else
+        "Seu índice aparece depois do próximo recálculo do servidor."
+    ScoreStatus.ERROR -> if (hasValue) "Não foi possível atualizar agora; mostrando a última leitura." else
+        "Toque em Atualizar para tentar de novo."
+    else -> null
+}
 
 /** Diferenca em pontos; 0 quando nao ha anterior ou a mudanca some no arredondamento. */
 private fun pointsDiff(entry: ScoreEntry): Int =

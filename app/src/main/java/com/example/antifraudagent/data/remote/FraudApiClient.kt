@@ -1,5 +1,7 @@
 package com.example.antifraudagent.data.remote
 
+import android.util.Log
+import com.example.antifraudagent.BuildConfig
 import com.example.antifraudagent.data.auth.AuthToken
 import com.example.antifraudagent.data.local.entity.MessageSource
 import kotlinx.coroutines.Dispatchers
@@ -107,12 +109,14 @@ class FraudApiClient(
         }
         try {
             val code = connection.responseCode
-            if (code == 404) return@withContext null
             val body = if (code in 200..299) {
                 connection.inputStream.bufferedReader().use { it.readText() }
             } else {
                 connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
             }
+            // So no debug, para diagnostico: codigo e corpo (nunca o token).
+            if (BuildConfig.DEBUG) Log.d("BlessScore", "GET /score -> HTTP $code ${body.take(200)}")
+            if (code == 404) return@withContext null
             if (code !in 200..299) throw FraudApiHttpException(code, body)
             val root = JSONObject(body)
             if (!root.has("vulnerability_score") || root.isNull("vulnerability_score")) return@withContext null

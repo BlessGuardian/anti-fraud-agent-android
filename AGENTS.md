@@ -461,6 +461,10 @@ alinhadas com `riskVisual`. Aqui subir e ruim.
   demais receberam proporcionalmente menos), caiu sem golpes e caiu mesmo com golpes (os demais
   receberam proporcionalmente mais). O score depende da media de todos os usuarios, entao pode
   mudar sem golpe novo do usuario. Se o backend passar a mandar o motivo, so o repositorio muda.
+- `ScoreRepository.status` (`ScoreStatus`): 404 do `/score` vira "Ainda não calculado" (com aviso do
+  proximo recalculo) e outros erros viram "Não foi possível consultar"; o 401 continua levando ao
+  login. No build debug, `getScore` registra no logcat (`BlessScore`) o codigo HTTP e o corpo da
+  resposta, nunca o token: `adb logcat -s BlessScore:D`.
 - Card na Inicio (estilo Serasa): velocimetro com as tres faixas e marcador, pontos "de 1000",
   faixa e "▲ subiu / ▼ caiu N pontos". Toque abre o "Historico": barras das ultimas 4 leituras
   (atual em destaque), lista "Subiu/Caiu N pontos / Se manteve o mesmo" com data que abre o
