@@ -449,16 +449,22 @@ A tela principal deve:
 ### Indice de vulnerabilidade (estilo Serasa)
 
 `ScoreRepository` + `ScoreUi.kt`. O valor vem do `GET /score` (0..1, por conta, periodo fixo
-definido pelo backend) e e buscado junto com o historico (`refreshData`).
+definido pelo backend) e e buscado junto com o historico (`refreshData`). A tela mostra de **0 a
+1000 pontos** (`scorePoints`), com as faixas baixa (0-399), media (400-749) e alta (750-1000),
+alinhadas com `riskVisual`. Aqui subir e ruim.
 
 - O backend so devolve o valor atual. O app guarda cada valor visto em `score_history` (vai no
   backup; limpo no logout) e, quando muda, cria uma entrada com valor anterior, data em que o app
-  percebeu e o **motivo**, montado a partir dos alertas do historico desde a mudanca anterior
-  (`ScoreRepository.reasonFor`, testado): "Subiu porque N golpes ou alertas..." ou
-  "Atualização geral: o servidor recalculou...". O score depende da media de todos os usuarios,
-  entao pode mudar sem golpe novo do usuario.
-- Card na Inicio: valor, faixa, "▲ subiu / ▼ caiu" e data; toque abre "Detalhes" (anterior ->
-  atual, motivo, como funciona, historico).
+  percebeu e o **motivo**, montado a partir dos golpes confirmados (`is_fraud`, a mesma base do
+  `calculate_scores`) desde a mudanca anterior (`ScoreRepository.reasonFor`, testado). Quatro
+  casos: subiu com golpes ("Subiu porque voce teve N golpes novos..."), subiu sem golpes (os
+  demais receberam proporcionalmente menos), caiu sem golpes e caiu mesmo com golpes (os demais
+  receberam proporcionalmente mais). O score depende da media de todos os usuarios, entao pode
+  mudar sem golpe novo do usuario. Se o backend passar a mandar o motivo, so o repositorio muda.
+- Card na Inicio (estilo Serasa): velocimetro com as tres faixas e marcador, pontos "de 1000",
+  faixa e "▲ subiu / ▼ caiu N pontos". Toque abre o "Historico": barras das ultimas 4 leituras
+  (atual em destaque), lista "Subiu/Caiu N pontos / Se manteve o mesmo" com data que abre o
+  motivo, "Como funciona" e legenda das faixas.
 - `risk_score` de cada log continua 0 no backend: zero e tratado como "sem pontuacao"
   (`meaningfulScore()`) nos cards de mensagem.
 
@@ -555,7 +561,7 @@ Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
 - Contato confiavel: atencao nao alerta; alto risco alerta com aviso de conta clonada.
 - Protecao reforcada (debug): `DebugEndCallReceiver` encerra ligacao e simula mensagem HIGH.
 - Sem sessao aparece o login; entrar/sair/sessao expirada funcionam.
-- Indice: card com valor do `/score`; mudanca gera entrada com motivo em "Detalhes".
+- Indice: card com velocimetro de 0 a 1000; mudanca gera entrada com motivo no "Historico" (barras + variacoes).
 - Responsavel: QR do responsavel lido no celular protegido; golpe HIGH manda SMS (debug: `--es mode message`).
 
 ## Formato esperado de resposta

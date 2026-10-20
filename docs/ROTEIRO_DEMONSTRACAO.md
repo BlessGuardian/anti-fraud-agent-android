@@ -1,7 +1,7 @@
 # Roteiro de demonstração — BlessGuardian (app Android)
 
 Roteiro para banca, feira (Eureka) e reuniões com o orientador. Tempo estimado: **8 a 10 minutos**.
-Tudo aqui foi testado no Galaxy S24 em 19/10/2026 contra o backend na AWS.
+Tudo aqui foi testado no Galaxy S24 em 19/10/2026 contra o backend na AWS (índice no formato 0 a 1000 conferido em 20/10).
 
 ---
 
@@ -87,8 +87,10 @@ Tudo aqui foi testado no Galaxy S24 em 19/10/2026 contra o backend na AWS.
   ```
 
 ### Cena 8 — Índice de vulnerabilidade, estilo Serasa (1 min)
-- Toque no card do índice → **Detalhes**: anterior → atual, **motivo** (ex.: "Subiu porque 2 golpes ou alertas foram detectados desde 15/10 (phishing)") e histórico.
-- O índice compara o usuário com os demais e só muda quando há motivo.
+- No Início, mostre o **velocímetro de 0 a 1000** com as faixas (baixa, média, alta) e a última variação ("▼ caiu 375 pontos · atualizado em 18/10").
+- Toque no card → **Histórico**: barras das últimas leituras (a atual em destaque) e a lista "Subiu/Caiu N pontos" com a data. Toque numa variação para mostrar o **motivo** (ex.: "Subiu porque você teve 2 golpes novos desde 15/10 (phishing).").
+- Explique: o índice compara o usuário com os demais e só muda quando há motivo. **Ao contrário do Serasa, aqui subir é ruim.**
+- Se o índice ainda não mudou nenhuma vez, o histórico mostra só a "Primeira leitura". Para ter variações, peça o recálculo antes (ver Preparação).
 
 ### Encerramento (30 s)
 - "Nenhum áudio de ligação é salvo; a lista de contatos não sai do celular; o SMS ao responsável não leva o texto do golpe."
