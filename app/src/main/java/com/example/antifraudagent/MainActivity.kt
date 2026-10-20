@@ -12,7 +12,6 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -78,10 +77,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -946,10 +942,11 @@ fun ProfileScreen(
                 )
                 val score = vulnerability.firstOrNull()?.value
                 if (score != null) {
+                    val band = scoreBand(scorePoints(score))
                     SummaryRow(
                         "Índice de vulnerabilidade",
-                        "${formatScore(score)} - ${riskName(score)}",
-                        riskVisual(score).color
+                        "${scorePoints(score)} de 1000 - ${band.label.substringAfter(' ')}",
+                        band.color
                     )
                 } else {
                     SummaryRow("Índice de vulnerabilidade", "em cálculo", BlessMuted)
@@ -1128,30 +1125,6 @@ fun PageIntro(text: String) {
         color = BlessMuted,
         style = MaterialTheme.typography.bodyMedium
     )
-}
-
-@Composable
-fun GaugeArc(score: Float) {
-    Canvas(modifier = Modifier.size(width = 142.dp, height = 82.dp)) {
-        val strokeWidth = 12.dp.toPx()
-        val arcSize = Size(size.width, size.height * 1.8f)
-        drawArc(
-            color = BlessPrimarySoft.copy(alpha = 0.65f),
-            startAngle = 180f,
-            sweepAngle = 180f,
-            useCenter = false,
-            size = arcSize,
-            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-        )
-        drawArc(
-            color = BlessPrimary,
-            startAngle = 180f,
-            sweepAngle = 180f * score.coerceIn(0f, 1f),
-            useCenter = false,
-            size = arcSize,
-            style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-        )
-    }
 }
 
 @Composable
@@ -1619,8 +1592,6 @@ fun riskVisual(score: Float): RiskVisual = when {
     score >= 0.4f -> RiskVisual("Medio risco", BlessWarning, BlessWarningSoft)
     else -> RiskVisual("Seguro", BlessSafe, BlessSafeSoft)
 }
-
-fun riskName(score: Float): String = riskVisual(score).label.lowercase()
 
 fun logVisual(log: RemoteFraudLog): RiskVisual = levelVisual(log.riskLevel, log.riskScore)
 

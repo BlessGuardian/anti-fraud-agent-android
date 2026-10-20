@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.antifraudagent.data.remote.FraudApiClient
 import com.example.antifraudagent.data.remote.RemoteFraudLog
-import com.example.antifraudagent.data.remote.RiskLevel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +18,7 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * Indice de vulnerabilidade estilo Serasa: valor unico (0..1) calculado no servidor (GET /score,
+ * Indice de vulnerabilidade estilo Serasa: valor unico (0..1, exibido de 0 a 1000) calculado no servidor (GET /score,
  * recalculado em periodo fixo pelo backend) que so muda quando ha um motivo.
  *
  * O backend devolve apenas o valor atual. O app guarda cada valor que viu (`score_history`, vai no
@@ -98,34 +97,43 @@ class ScoreRepository private constructor(context: Context) {
                 return ScoreEntry(value, null, now, "Primeira leitura do seu índice.")
             }
             if (abs(value - last.value) < EPSILON) return null
-            return ScoreEntry(value, last.value, now, reasonFor(last.value, value, alertsSince(logs, last.observedAt), last.observedAt))
+            return ScoreEntry(value, last.value, now, reasonFor(last.value, value, fraudsSince(logs, last.observedAt), last.observedAt))
         }
 
-        /** Alertas (atencao ou alto risco) detectados depois de `sinceMillis`. */
-        fun alertsSince(logs: List<RemoteFraudLog>, sinceMillis: Long): List<RemoteFraudLog> =
+        /**
+         * Golpes confirmados (is_fraud) depois de `sinceMillis`: e o que o servidor conta no
+         * calculate_scores, entao o motivo usa a mesma base.
+         */
+        fun fraudsSince(logs: List<RemoteFraudLog>, sinceMillis: Long): List<RemoteFraudLog> =
             logs.filter { log ->
-                log.riskLevel != RiskLevel.SAFE &&
-                    (parseMillis(log.detectedAt)?.let { it > sinceMillis } == true)
+                log.isFraud && (parseMillis(log.detectedAt)?.let { it > sinceMillis } == true)
             }
 
-        fun reasonFor(previous: Float, current: Float, alerts: List<RemoteFraudLog>, sinceMillis: Long): String {
+        /**
+         * O servidor nao explica a mudanca: o indice e a posicao da sua quantidade de golpes entre a
+         * dos demais usuarios (media +- 3 desvios). Por isso o motivo cruza a direcao da mudanca com
+         * os golpes novos do seu historico.
+         */
+        fun reasonFor(previous: Float, current: Float, frauds: List<RemoteFraudLog>, sinceMillis: Long): String {
             val since = SimpleDateFormat("dd/MM", Locale("pt", "BR")).format(Date(sinceMillis))
-            val general = "o servidor recalculou o índice comparando você com os demais usuários"
-            if (alerts.isEmpty()) {
-                return if (current < previous) {
-                    "Caiu: nenhum golpe novo desde $since e $general."
+            val up = current > previous
+            if (frauds.isEmpty()) {
+                return if (up) {
+                    "Subiu na comparação com os demais usuários: você não teve golpes novos desde $since, " +
+                        "mas os outros usuários receberam proporcionalmente menos golpes que você."
                 } else {
-                    "Atualização geral: $general."
+                    "Caiu: você não teve golpes novos desde $since."
                 }
             }
-            val n = alerts.size
-            val what = if (n == 1) "1 golpe ou alerta foi detectado" else "$n golpes ou alertas foram detectados"
-            val categories = alerts.mapNotNull { categoryLabel(it.category) }.distinct().take(3)
+            val n = frauds.size
+            val what = if (n == 1) "1 golpe novo" else "$n golpes novos"
+            val categories = frauds.mapNotNull { categoryLabel(it.category) }.distinct().take(3)
             val detail = if (categories.isEmpty()) "" else " (${categories.joinToString(", ")})"
-            return if (current > previous) {
-                "Subiu porque $what desde $since$detail."
+            return if (up) {
+                "Subiu porque você teve $what desde $since$detail."
             } else {
-                "Atualização geral: $general. Desde $since, $what$detail."
+                "Caiu mesmo com $what desde $since$detail: os demais usuários receberam " +
+                    "proporcionalmente mais golpes que você."
             }
         }
 

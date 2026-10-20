@@ -74,7 +74,7 @@ O nível de risco mostrado ao usuário vem do veredito híbrido: **alto risco** 
 | Idosos e crianças: responsável cadastrado por QR e avisado por SMS em golpe confirmado | ✅ |
 | Aviso ao responsável por e-mail e no app dele | ⏳ aguardando backend |
 | Login obrigatório com a conta BlessGuardian (histórico e índice exigem token) | ✅ |
-| Índice de vulnerabilidade estilo Serasa: valor do servidor, variação, motivo e histórico | ✅ |
+| Índice de vulnerabilidade estilo Serasa (0 a 1000): velocímetro, barras, variações e motivo | ✅ |
 | Leaderboard de golpes frequentes | ⏳ aguardando backend |
 
 ### Proteção de ligações
@@ -93,7 +93,7 @@ O e-mail do responsável já fica guardado; o envio por e-mail e o aviso no app 
 
 ### Índice de vulnerabilidade
 
-Valor de 0 a 1 calculado no servidor, comparando o usuário com os demais. Como no Serasa, ele só muda quando há um motivo: o card mostra se subiu ou caiu e quando, e "Detalhes" mostra o valor anterior, o atual, o motivo e o histórico.
+Calculado no servidor, comparando o usuário com os demais, e mostrado de **0 a 1000 pontos** como no Serasa (só que aqui subir é ruim): 0–399 baixa, 400–749 média e 750–1000 alta vulnerabilidade. O card mostra um velocímetro com as faixas e a última variação. Tocando nele abre o histórico: barras das últimas leituras e a lista "Subiu/Caiu N pontos" com a data e o motivo de cada mudança.
 
 ---
 
