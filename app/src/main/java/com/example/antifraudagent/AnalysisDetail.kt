@@ -1,7 +1,9 @@
 package com.example.antifraudagent
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Info
@@ -41,6 +45,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -311,14 +319,9 @@ fun AnalysisDetailSheet(detail: AnalysisDetail, onDismiss: () -> Unit) {
                 }
             }
 
-            // Comite de algoritmos: so no modo tecnico (para o leigo, dois votos diferentes confundem).
-            detail.hybrid?.takeIf { LocalTechnicalMode.current }?.let { hybrid ->
-                DetailSection(title = "Como foi decidido") {
-                    DecisionRow("Inteligência artificial", hybrid.llm)
-                    DecisionRow("Modelo local", hybrid.localModel)
-                    DecisionRow("Veredito final", hybrid.status?.lowercase()?.replaceFirstChar { it.titlecase(ptBR) })
-                }
-            }
+            // Comite de algoritmos: para todos, recolhido em "Detalhes tecnicos" (para o leigo, dois
+            // votos diferentes confundem). No modo tecnico (admin) ja abre expandido.
+            detail.hybrid?.let { hybrid -> TechnicalDetails(hybrid) }
 
             detail.reasoning?.takeIf { it != detail.justification }?.let { reasoning ->
                 DetailSection(title = "Análise detalhada") {
@@ -482,6 +485,56 @@ private fun QuoteBlock(text: String, accent: androidx.compose.ui.graphics.Color)
             fontStyle = FontStyle.Italic,
             modifier = Modifier.padding(14.dp)
         )
+    }
+}
+
+@Composable
+private fun TechnicalDetails(hybrid: HybridVerdict) {
+    val technicalMode = LocalTechnicalMode.current
+    var expanded by rememberSaveable { mutableStateOf(technicalMode) }
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = BlessSurfaceElevated,
+        border = androidx.compose.foundation.BorderStroke(1.dp, BlessBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Detalhes técnicos",
+                    color = BlessText,
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "Recolher" else "Expandir",
+                    tint = BlessMuted
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Como foi decidido",
+                        color = BlessMuted,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    DecisionRow("Inteligência artificial", hybrid.llm)
+                    DecisionRow("Modelo local", hybrid.localModel)
+                    DecisionRow("Veredito final", hybrid.status?.lowercase()?.replaceFirstChar { it.titlecase(ptBR) })
+                }
+            }
+        }
     }
 }
 

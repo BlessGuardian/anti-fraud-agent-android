@@ -349,6 +349,12 @@ acessibilidade + notificação + vibração; mensagens com mais de 5 min (fila o
 O pop-up só aparece em `RiskLevel.HIGH` ("Alta probabilidade de golpe"); `ATTENTION` gera apenas
 notificação de atenção. O texto é genérico, para o usuário leigo.
 
+Um alerta por mensagem: `MessageAlertDedup` guarda a impressão digital (SHA-256 do texto
+normalizado, nunca o texto) de cada mensagem que já alertou, por 24h, em `alerted_messages.xml`
+(máximo de 500). A mesma mensagem capturada de novo (acessibilidade ao abrir a conversa depois da
+notificação, reinício do app, notificação atualizada) não repete notificação, pop-up, vibração nem SMS
+ao responsável. O `/detect` continua sendo chamado (o histórico pode ter registros repetidos).
+
 ## Protecao reforcada
 
 Parte local do modo idoso/crianca (`SettingsRepository.reinforcedProtection`, opcao no Perfil).
@@ -486,9 +492,10 @@ Nao usar `isFraud` direto na UI: o backend grava `is_fraud=true` tambem para `av
 
 ### Modo tecnico
 
-O bloco "Como foi decidido" (votos do LLM e do modelo local) so aparece com o modo tecnico ligado
-(`SettingsRepository.technicalMode`, exposto via `LocalTechnicalMode`). Desligado por padrao.
-Conta com papel `admin` ve o comite automaticamente. No build debug, 7 toques seguidos no logo
+O bloco "Como foi decidido" (votos do LLM e do modelo local) aparece para todos os usuarios, dentro
+do expansor "Detalhes técnicos" do detalhe da analise (`TechnicalDetails`), recolhido por padrao.
+Com o modo tecnico ligado (`SettingsRepository.technicalMode`, exposto via `LocalTechnicalMode`) ele
+ja abre expandido; conta com papel `admin` liga o modo tecnico automaticamente. No build debug, 7 toques seguidos no logo
 ligam/desligam o modo (demonstracao); ligado, aparece o painel "Modo tecnico" no Perfil. No build
 de release os toques nao fazem nada.
 
@@ -559,7 +566,9 @@ Pela linha de comando (Windows), use o JDK do Android Studio e o SDK:
 - Kill switch da aba Perfil pausa envio e nao acumula em Room enquanto desligado.
 - `LocalMessagePreprocessor` rejeita ruido conhecido antes de chegar ao backend; aba `Analisar` ignora esse filtro.
 - `FraudAccessibilityService` nao captura conteudo do proprio app nem de apps fora do alvo (validacao em `processWindow`).
-- `./gradlew :app:testDebugUnitTest` passa (contatos confiaveis, resumo de notificacoes, `LinkCode`).
+- `./gradlew :app:testDebugUnitTest` passa (contatos confiaveis, resumo de notificacoes, `LinkCode`,
+  alerta unico por mensagem).
+- Golpe recebido por notificacao e depois lido na conversa alerta uma unica vez.
 - Reinstalar o app nao reenvia a fila antiga (log "PENDING restaurados descartados").
 - Entrar / criar conta / sair funcionam; papel `admin` mostra "Como foi decidido".
 - Contato confiavel: atencao nao alerta; alto risco alerta com aviso de conta clonada.

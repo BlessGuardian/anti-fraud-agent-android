@@ -1488,11 +1488,13 @@ fun SecondaryActionButton(
         onClick = {},
         enabled = false,
         modifier = modifier.height(48.dp),
-        shape = RoundedCornerShape(14.dp)
+        shape = RoundedCornerShape(14.dp),
+        // Padding horizontal padrao (24dp) quebrava "Compartilhar" em duas linhas em tela estreita.
+        contentPadding = PaddingValues(horizontal = 8.dp)
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(6.dp))
-        Text(label)
+        Text(label, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
     }
 }
 
