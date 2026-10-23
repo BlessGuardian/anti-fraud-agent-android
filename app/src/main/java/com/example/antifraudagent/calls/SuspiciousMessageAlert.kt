@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.VibratorManager
+import android.util.Log
 import com.example.antifraudagent.MainActivity
 import com.example.antifraudagent.R
 import com.example.antifraudagent.data.remote.FraudAnalysisResult
@@ -42,6 +43,12 @@ object SuspiciousMessageAlert {
         fromTrustedContact: Boolean = false
     ) {
         val appContext = context.applicationContext
+        // Um alerta por mensagem: a mesma mensagem capturada de novo (abrir a conversa, reinicio do
+        // app) nao repete notificacao, pop-up, vibracao nem SMS ao responsavel.
+        if (!MessageAlertDedup.tryClaim(appContext, content)) {
+            Log.d(TAG, "Mensagem ja alertada nas ultimas 24h; alerta suprimido")
+            return
+        }
         val origin = sourceLabel(sourceName)
         // Contato confiavel so chega aqui em alto risco: o aviso explica a possivel conta clonada.
         val reason = if (fromTrustedContact) {
@@ -123,4 +130,5 @@ object SuspiciousMessageAlert {
     }
 
     private const val MESSAGE_NOTIFICATION_BASE = 7400_000
+    private const val TAG = "SuspiciousMessageAlert"
 }
